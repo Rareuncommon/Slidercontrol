@@ -19,6 +19,7 @@ class JogPad extends StatefulWidget {
     required this.onVelocity,
     required this.onRelease,
     this.disabledNote,
+    this.readout,
   });
 
   final String label;
@@ -31,6 +32,11 @@ class JogPad extends StatefulWidget {
 
   /// Shown in place of the label when the pad cannot be used.
   final String? disabledNote;
+
+  /// What is currently being commanded, shown under the pad. Without this,
+  /// resting on the knob and seeing nothing move is indistinguishable from a
+  /// broken link — the pad is absolute, so the centre commands zero.
+  final String? readout;
 
   @override
   State<JogPad> createState() => _JogPadState();
@@ -156,17 +162,21 @@ class _JogPadState extends State<JogPad> {
                       ),
                     ),
                   ),
-                  if (!enabled && widget.disabledNote != null)
-                    Positioned(
-                      bottom: size * 0.12,
-                      child: Text(
-                        widget.disabledNote!,
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: scheme.onSurfaceVariant,
-                        ),
+                  Positioned(
+                    bottom: size * 0.1,
+                    child: Text(
+                      !enabled
+                          ? (widget.disabledNote ?? '')
+                          : (widget.readout ??
+                              'drag left or right'),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: _held && enabled
+                            ? scheme.primary
+                            : scheme.onSurfaceVariant,
                       ),
                     ),
+                  ),
                 ],
               ),
             ),

@@ -463,6 +463,15 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
                 enabled: c.snapshot.isReady && !_fleetRunning,
                 disabledNote:
                     _fleetRunning ? 'ping-pong running' : 'not connected',
+                readout: () {
+                  final jog = _jogs[c.device.remoteId.str];
+                  if (jog == null || !jog.isJogging) {
+                    return 'drag left or right';
+                  }
+                  return jog.velocity == 0
+                      ? 'centred — 0 counts/s'
+                      : '${jog.velocity > 0 ? '+' : ''}${jog.velocity} counts/s';
+                }(),
                 onVelocity: (fraction) {
                   final jog = _jogs[c.device.remoteId.str];
                   final full = _settingsFor(c.kind).motion.jogVelocity();
@@ -473,6 +482,8 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
                   } else {
                     jog.start(v).catchError((Object e) => _report('$e'));
                   }
+                  // Refresh the readout so what is being commanded is visible.
+                  if (mounted) setState(() {});
                 },
                 onRelease: () => _jogs[c.device.remoteId.str]
                     ?.stop()

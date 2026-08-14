@@ -52,6 +52,7 @@ class FakeRail implements EkMotionTarget {
   Duration _stickyLeft;
   bool _ditherUp = false;
   bool _linkUp = true;
+  bool _telemetryFrozen = false;
 
   int stops = 0;
   final velocities = <int>[];
@@ -60,6 +61,9 @@ class FakeRail implements EkMotionTarget {
   EkKind get kind => EkKind.slider;
 
   void dropLink() => _linkUp = false;
+
+  /// The link stays up but notifications stop, so the position counter freezes.
+  void freezeTelemetry() => _telemetryFrozen = true;
 
   void _integrate() {
     final now = DateTime.now();
@@ -98,7 +102,9 @@ class FakeRail implements EkMotionTarget {
       kind: EkKind.slider,
       state: _velocity == 0 ? EkState.idle : EkState.manualJog,
       position: _pos.round(),
-      lastFrameAt: DateTime.now(),
+      lastFrameAt: _telemetryFrozen
+          ? DateTime.now().subtract(const Duration(seconds: 5))
+          : DateTime.now(),
     );
   }
 
@@ -333,5 +339,27 @@ void main() {
       expect(datum.clampSoft(100000), 100000 - softMargin);
       expect(datum.clampSoft(50000), 50000);
     });
+  });
+
+  group('telemetry that stops', () {
+    test('is reported as such, not as a stall', () async {
+      // A frozen position counter is indistinguishable from a carriage pressed
+      // against a stop. Reading it as a stall made homing declare an end within
+      // a second of starting, "confirm" it, and finish having barely moved.
+      final rail = FakeRail(lo: 0, hi: 400000, start: 100000);
+      final h = quickHoming(rail);
+
+      final run = h.homeSingle();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      rail.freezeTelemetry();
+
+      await expectLater(
+        run,
+        throwsA(isA<HomingAborted>().having(
+            (e) => e.reason, 'reason', contains('telemetry stopped'))),
+      );
+      expect(rail.stops, greaterThan(0),
+          reason: 'the motor must still be stopped');
+    }, timeout: const Timeout(Duration(seconds: 30)));
   });
 }

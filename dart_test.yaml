@@ -1,0 +1,9 @@
+# The homing tests drive a simulated rail that integrates commanded velocity
+# over wall-clock time, because the code under test streams velocity on a real
+# timer. Running test files concurrently starves those timers on a loaded
+# machine and makes the stall-detection tests flake.
+#
+# These tests are the ones standing between a bug and a carriage driven into a
+# mechanical stop, so determinism is worth more here than the twenty seconds
+# parallelism saves.
+concurrency: 1

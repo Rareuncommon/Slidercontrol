@@ -129,10 +129,18 @@ class EkFrameRecord {
   final List<int> bytes;
   final bool checksumOk;
 
+  /// True for frames the app wrote, false for notifications it received.
+  ///
+  /// Both directions are logged because most of what goes wrong is a command
+  /// not going out, or going out with the wrong value — and neither is visible
+  /// from the received side alone.
+  final bool outgoing;
+
   const EkFrameRecord({
     required this.at,
     required this.bytes,
     required this.checksumOk,
+    this.outgoing = false,
   });
 
   /// Message type — the first byte. Not a length, in this direction (§2).
@@ -151,7 +159,8 @@ class EkFrameRecord {
 
   /// A line suited to pasting into a protocol note or a diff against a capture.
   String toLogLine() =>
-      '$timestamp  len=${bytes.length.toString().padLeft(3)}  '
+      '$timestamp  ${outgoing ? 'TX' : 'RX'}  '
+      'len=${bytes.length.toString().padLeft(3)}  '
       'type=0x${messageType.toRadixString(16).padLeft(2, '0')}  '
       '${checksumOk ? '   ' : 'BAD'}  $hex';
 }
