@@ -30,12 +30,20 @@ class PingPongStatus {
   /// Completed one-way legs, not round trips.
   final int legs;
 
+  /// How long the last completed leg took. Null until one finishes.
+  ///
+  /// Worth showing: on the head it is the only feedback there is that the
+  /// blind-leg timer is anywhere near the real move duration, and on the slider
+  /// it makes a speed change legible.
+  final Duration? lastLeg;
+
   final String? error;
 
   const PingPongStatus({
     required this.phase,
     this.slot,
     this.legs = 0,
+    this.lastLeg,
     this.error,
   });
 
@@ -77,6 +85,7 @@ class PingPongController {
   Future<void>? _loop;
   int _slot = 0;
   int _legs = 0;
+  Duration? _lastLeg;
 
   bool get isRunning => _running;
 
@@ -122,6 +131,7 @@ class PingPongController {
       phase: PingPongPhase.stopped,
       slot: _status.slot,
       legs: _status.legs,
+      lastLeg: _status.lastLeg,
       error: _status.error,
     ));
   }
@@ -148,6 +158,7 @@ class PingPongController {
         phase: phase,
         slot: _slot,
         legs: _legs,
+        lastLeg: _lastLeg,
       )),
     );
 
@@ -158,6 +169,7 @@ class PingPongController {
           break;
         }
 
+        final legStarted = DateTime.now();
         await supervisor.command(_slot, motion);
         final outcome = await supervisor.awaitCompletion(timings);
 
@@ -166,6 +178,7 @@ class PingPongController {
           break;
         }
 
+        _lastLeg = DateTime.now().difference(legStarted);
         _legs++;
         if (maxLegs > 0 && _legs >= maxLegs) break;
         _slot = _slot == slotA ? slotB : slotA;
@@ -175,6 +188,7 @@ class PingPongController {
             phase: PingPongPhase.dwelling,
             slot: _slot,
             legs: _legs,
+            lastLeg: _lastLeg,
           ));
           if (!await supervisor.sleep(dwell)) break;
         }
@@ -193,6 +207,7 @@ class PingPongController {
         phase: error == null ? PingPongPhase.stopped : PingPongPhase.failed,
         slot: _slot,
         legs: _legs,
+        lastLeg: _lastLeg,
         error: error,
       ));
     }
