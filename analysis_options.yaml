@@ -1,0 +1,43 @@
+# This file configures the analyzer, which statically analyzes Dart code to
+# check for errors, warnings, and lints.
+#
+# The issues identified by the analyzer are surfaced in the UI of Dart-enabled
+# IDEs (https://dart.dev/tools#ides-and-editors). The analyzer can also be
+# invoked from the command line by running `flutter analyze`.
+
+# The following line activates a set of recommended lints for Flutter apps,
+# packages, and plugins designed to encourage good coding practices.
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
+
+linter:
+  # The lint rules applied to this project can be customized in the
+  # section below to disable rules from the `package:flutter_lints/flutter.yaml`
+  # included above or to enable additional rules. A list of all available lints
+  # and their documentation is published at https://dart.dev/lints.
+  #
+  # Instead of disabling a lint rule for the entire project in the
+  # section below, it can also be suppressed for a single line of code
+  # or a specific dart file by using the `// ignore: name_of_lint` and
+  # `// ignore_for_file: name_of_lint` syntax on the line or in the file
+  # producing the lint.
+  rules:
+    # lib/ek_protocol.dart and test/ek_protocol_test.dart are ground truth:
+    # every frame they produce was verified byte-for-byte against PacketLogger
+    # captures of the official app. They are kept verbatim, so the three style
+    # lints they trip are disabled here rather than by editing those files.
+    unnecessary_library_name: false      # ek_protocol.dart's `library` directive
+    dangling_library_doc_comments: false # the test file's leading doc comment
+    avoid_relative_lib_imports: false    # the test's `../lib/ek_protocol.dart`
+
+# Additional information about this file can be found at
+# https://dart.dev/guides/language/analysis-options
