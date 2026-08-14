@@ -17,10 +17,17 @@ A motor is attached to a camera. These are not theoretical.
 - **The app always sends a stop before it disconnects or is backgrounded.** If a
   client dies mid-move the device keeps executing and holds torque, leaving the
   carriage locked and immovable by hand.
-- **Never home the head.** It has no end stops. There is no homing anywhere in
-  this codebase, for either device. If any is ever added, its stall detection
-  must use net progress over a ~0.5 s window, not per-tick deltas — against a
-  hard stop the encoder dithers by hundreds of counts (§7).
+- **Never home the head.** It has no end stops. `Homing` refuses a head target
+  at every entry point.
+- **Homing drives the slider into its mechanical stops on purpose.** It is
+  always an explicit, confirmed action behind a camera-off warning, with live
+  progress and an abort — never something that happens quietly on connect. Each
+  pass is bounded three ways: stall detection, a travel budget, and a timeout,
+  and it aborts the moment the link drops.
+- Stall detection uses **net progress over a ~0.5 s window**, not per-tick
+  deltas — against a hard stop the encoder dithers by hundreds of counts — and a
+  suspected stop is confirmed by backing off and re-approaching, because the
+  SliderPLUS's mid-rail mechanism transition imitates an end stop (§7).
 - **The slider has no soft limits.** It will drive into its mechanical stops and
   grind indefinitely.
 - Unattended motion uses pose recalls, never streamed velocity. A recall is one
@@ -52,8 +59,13 @@ A motor is attached to a camera. These are not theoretical.
 | `lib/control/leg_supervisor.dart` | One leg of motion, supervised. Pure. Shared. |
 | `lib/control/ping_pong.dart` | Host-supervised loop between two poses. |
 | `lib/control/fleet.dart` | Several devices moving together. Pure. |
-| `lib/ui/control_page.dart` | The single control page: both devices plus shared controls. |
-| `lib/ui/device_column.dart` | One device's controls, as a column. |
+| `lib/control/homing.dart` | Homing, stall detection, closed-loop moves. Pure. |
+| `lib/control/pose_store.dart` | Keypose slots and their persistence. Pure. |
+| `lib/control/keypose_controller.dart` | Keyposes across every device. |
+| `lib/ui/control_page.dart` | The single, non-scrolling control page. |
+| `lib/ui/jog_pad.dart` | Circular proportional jog pad. |
+| `lib/ui/keypose_tiles.dart` | Keypose tiles and the slider position track. |
+| `lib/ui/homing_dialog.dart` | Homing and pose restore, with progress. |
 | `lib/ui/ui_scale.dart` | Shared spacing, type and the Section/Caution widgets. |
 | `lib/ui/frame_inspector.dart` | Raw notification frames, for decoding §8. |
 | `lib/main.dart` | Device list (entry point only) and global stop. |
@@ -68,7 +80,7 @@ flutter pub get
 dart test
 ```
 
-99 tests, no hardware and no Flutter binding required. They cover the protocol
+129 tests, no hardware and no Flutter binding required. They cover the protocol
 against the captured bytes, plus the motion logic — including that a stop goes
 out on every exit path: normal completion, user stop, lost link, timed-out leg,
 and a write that throws.
@@ -112,6 +124,12 @@ These come from the spec, not from the implementation:
   speeds if you need them to arrive together.
 - Point Tracking is not implemented (§8); it needs edelkrone's inverse
   kinematics, not just the protocol.
+- **Head poses cannot be restored after a power cycle.** The head reports no
+  position (§5), so there is nothing to record and nothing to verify arrival
+  against. Jogging open-loop for a stored duration would drift with battery and
+  load, silently, so the app does not do it — head poses are re-taught by hand
+  each session, and the UI says so. Slider poses saved while homed are stored as
+  a fraction of measured travel and **can** be restored.
 
 ## Licence note
 
