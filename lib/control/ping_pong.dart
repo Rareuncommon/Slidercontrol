@@ -18,6 +18,7 @@ import 'dart:async';
 
 import '../ble/ek_snapshot.dart';
 import '../ek_protocol.dart';
+import 'motion_settings.dart';
 
 enum PingPongPhase {
   stopped,
@@ -108,7 +109,7 @@ class PingPongController {
   /// Starts the loop. Returns once the loop has *finished* — call without
   /// awaiting to run it in the background, then use [stop].
   Future<void> start({
-    required MotionParams motion,
+    required MotionSettings motion,
     Duration settle = defaultSettle,
     Duration launchGrace = defaultLaunchGrace,
     Duration moveTimeout = defaultMoveTimeout,
@@ -151,7 +152,7 @@ class PingPongController {
   }
 
   Future<void> _run({
-    required MotionParams motion,
+    required MotionSettings motion,
     required Duration settle,
     required Duration launchGrace,
     required Duration moveTimeout,
@@ -173,7 +174,7 @@ class PingPongController {
           slot: slot,
           legs: legs,
         ));
-        await target.recallPose(slot, motion: motion);
+        await target.recallPose(slot, settings: motion);
 
         final result = target.snapshot.reportsMotionState
             ? await _superviseLeg(

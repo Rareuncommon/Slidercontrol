@@ -1,12 +1,10 @@
-/// Stage 2: transport check.
+/// Slidercontrol — BLE control for edelkrone SliderPLUS v6 and HeadONE.
 ///
-/// This screen is deliberately READ-ONLY — it scans, connects, polls and
-/// displays telemetry, and sends no motion command of any kind. It exists to
-/// prove the part of the stack that cannot be unit-tested: that the keepalive
-/// actually makes a device report, and that the frames parse.
-///
-/// Jog, poses and ping-pong arrive in the next stages.
+/// See EDELKRONE_PROTOCOL.md for the protocol this speaks, and §8 for what is
+/// still undecoded.
 library;
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -15,6 +13,7 @@ import 'ble/ek_connection.dart';
 import 'ble/ek_permissions.dart';
 import 'ble/ek_scanner.dart';
 import 'ek_protocol.dart';
+import 'ui/device_panel.dart';
 
 void main() {
   runApp(const SlidercontrolApp());
@@ -48,6 +47,7 @@ class _DeviceListPageState extends State<DeviceListPage>
     with WidgetsBindingObserver {
   final _scanner = EkScanner();
   final _connections = <String, EkConnection>{};
+  final _snapSubs = <String, StreamSubscription<EkSnapshot>>{};
 
   List<EkDiscovered> _found = const [];
   String? _message;
@@ -65,8 +65,10 @@ class _DeviceListPageState extends State<DeviceListPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    // Fire-and-forget: dispose() cannot await, but each connection sends its
-    // stop before dropping the link.
+    for (final s in _snapSubs.values) {
+      s.cancel();
+    }
+    // Each connection sends its stop before dropping the link.
     for (final c in _connections.values) {
       c.dispose();
     }
@@ -74,11 +76,10 @@ class _DeviceListPageState extends State<DeviceListPage>
     super.dispose();
   }
 
-  /// Safety: never leave a motor running because the app went away.
+  /// Backgrounding the app stops every connected device.
   ///
-  /// A device left mid-move keeps executing and holds torque, locking the
-  /// carriage (§7). Nothing on this screen commands motion yet, but the hook
-  /// belongs here from the start rather than being added once it can bite.
+  /// A device left mid-move keeps executing and holds torque, leaving the
+  /// carriage locked and unmovable by hand (§7).
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
@@ -115,21 +116,14 @@ class _DeviceListPageState extends State<DeviceListPage>
     }
   }
 
-  Future<void> _toggle(EkDiscovered d) async {
-    final existing = _connections[d.id];
-    if (existing != null) {
-      await existing.dispose();
-      setState(() => _connections.remove(d.id));
-      return;
-    }
-
+  Future<void> _connect(EkDiscovered d) async {
     final conn = EkConnection(
       device: d.device,
       profile: d.profile,
       name: d.advertisedName,
     );
     setState(() => _connections[d.id] = conn);
-    conn.snapshots.listen((_) {
+    _snapSubs[d.id] = conn.snapshots.listen((_) {
       if (mounted) setState(() {});
     });
 
@@ -141,11 +135,24 @@ class _DeviceListPageState extends State<DeviceListPage>
     }
   }
 
+  Future<void> _disconnect(String id) async {
+    await _snapSubs.remove(id)?.cancel();
+    final c = _connections.remove(id);
+    setState(() {});
+    await c?.dispose();
+  }
+
+  void _open(EkConnection c) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => DevicePanel(connection: c)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Slidercontrol — transport check'),
+        title: const Text('Slidercontrol'),
         actions: [
           IconButton(
             onPressed: _busy ? null : _scan,
@@ -168,27 +175,32 @@ class _DeviceListPageState extends State<DeviceListPage>
                 ),
               ),
             ),
-          const Padding(
-            padding: EdgeInsets.all(12),
-            child: Text(
-              'Read-only. This build sends no motion commands.',
-              style: TextStyle(fontStyle: FontStyle.italic),
-            ),
-          ),
           if (_busy) const LinearProgressIndicator(),
           Expanded(
             child: _found.isEmpty
-                ? const Center(child: Text('No edelkrone devices found yet.\n'
-                    'Power the devices on and tap the search icon.',
-                    textAlign: TextAlign.center))
+                ? const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text(
+                        'No edelkrone devices found yet.\n'
+                        'Power the devices on and tap the search icon.',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  )
                 : ListView.builder(
                     itemCount: _found.length,
                     itemBuilder: (_, i) {
                       final d = _found[i];
+                      final c = _connections[d.id];
                       return _DeviceTile(
                         discovered: d,
-                        connection: _connections[d.id],
-                        onToggle: () => _toggle(d),
+                        connection: c,
+                        onConnect: () => _connect(d),
+                        onDisconnect: () => _disconnect(d.id),
+                        onOpen: c != null && c.snapshot.isReady
+                            ? () => _open(c)
+                            : null,
                       );
                     },
                   ),
@@ -203,88 +215,73 @@ class _DeviceTile extends StatelessWidget {
   const _DeviceTile({
     required this.discovered,
     required this.connection,
-    required this.onToggle,
+    required this.onConnect,
+    required this.onDisconnect,
+    required this.onOpen,
   });
 
   final EkDiscovered discovered;
   final EkConnection? connection;
-  final VoidCallback onToggle;
+  final VoidCallback onConnect;
+  final VoidCallback onDisconnect;
+  final VoidCallback? onOpen;
 
   @override
   Widget build(BuildContext context) {
-    final snap = connection?.snapshot;
-    final connected = snap?.isReady ?? false;
+    final s = connection?.snapshot;
+    final theme = Theme.of(context);
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
+      child: ListTile(
+        onTap: onOpen,
+        leading: Icon(discovered.profile.kind == EkKind.slider
+            ? Icons.linear_scale
+            : Icons.threesixty),
+        title: Text(discovered.advertisedName),
+        subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Icon(discovered.profile.kind == EkKind.slider
-                    ? Icons.linear_scale
-                    : Icons.threesixty),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(discovered.advertisedName,
-                          style: Theme.of(context).textTheme.titleMedium),
-                      Text(
-                        '${discovered.profile.name} · ${discovered.rssi} dBm',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
+            Text('${discovered.profile.name} · ${discovered.rssi} dBm'),
+            if (s != null)
+              Row(
+                children: [
+                  Icon(
+                    s.isReporting ? Icons.circle : Icons.circle_outlined,
+                    size: 10,
+                    color: s.isReporting ? Colors.green : Colors.orange,
                   ),
-                ),
-                FilledButton.tonal(
-                  onPressed: onToggle,
-                  child: Text(connection == null ? 'Connect' : 'Disconnect'),
-                ),
-              ],
-            ),
-            if (snap != null) ...[
-              const Divider(),
-              _kv('link', snap.link.name),
-              _kv('reporting', snap.isReporting ? 'yes' : 'NO — check keepalive'),
-              _kv('state', snap.state.name),
-              _kv('battery',
-                  snap.batteryPercent == null ? '—' : '${snap.batteryPercent}%'),
-              _kv(
-                'position',
-                discovered.profile.kind == EkKind.head
-                    ? 'not reported by the head (§5)'
-                    : (snap.position?.toString() ?? '—'),
+                  const SizedBox(width: 6),
+                  Text(s.link.name),
+                  if (s.batteryPercent != null) ...[
+                    const SizedBox(width: 12),
+                    const Icon(Icons.battery_full, size: 14),
+                    Text('${s.batteryPercent}%'),
+                  ],
+                ],
               ),
-              _kv('frames', '${snap.framesReceived}'),
-              if (snap.checksumFailures > 0)
-                _kv('checksum failures', '${snap.checksumFailures}'),
-              if (snap.error != null) _kv('error', snap.error!),
-            ] else if (connected) ...[
-              const Divider(),
-              const Text('connecting…'),
-            ],
+            if (s != null && s.isReady && !s.isReporting)
+              Text('no telemetry — check the keepalive',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: Colors.orange)),
+          ],
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (onOpen != null)
+              IconButton(
+                onPressed: onOpen,
+                icon: const Icon(Icons.tune),
+                tooltip: 'Controls',
+              ),
+            FilledButton.tonal(
+              onPressed: connection == null ? onConnect : onDisconnect,
+              child: Text(connection == null ? 'Connect' : 'Disconnect'),
+            ),
           ],
         ),
       ),
     );
   }
-
-  Widget _kv(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 130,
-              child: Text(k, style: const TextStyle(color: Colors.white54)),
-            ),
-            Expanded(child: Text(v)),
-          ],
-        ),
-      );
 }

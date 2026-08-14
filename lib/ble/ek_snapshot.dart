@@ -7,6 +7,7 @@
 /// on an abstraction rather than on a live GATT connection.
 library;
 
+import '../control/motion_settings.dart';
 import '../ek_protocol.dart';
 
 enum EkLinkState { disconnected, connecting, discovering, ready, failed }
@@ -103,6 +104,11 @@ abstract class EkMotionTarget {
   EkSnapshot get snapshot;
   Stream<EkSnapshot> get snapshots;
 
-  Future<void> recallPose(int slot, {required MotionParams motion});
+  Future<void> recallPose(int slot, {required MotionSettings settings});
+  Future<void> savePose(int slot);
+
+  /// Velocity in encoder counts/sec. Zero means stop.
+  Future<void> setVelocity(int countsPerSec);
+
   Future<void> stopMotion();
 }

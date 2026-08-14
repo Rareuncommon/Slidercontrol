@@ -13,6 +13,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
+import '../control/motion_settings.dart';
 import '../ek_protocol.dart';
 import 'ek_snapshot.dart';
 
@@ -210,18 +211,20 @@ class EkConnection implements EkMotionTarget {
   @override
   Future<void> stopMotion() => send(profile.stop());
 
+  @override
   Future<void> setVelocity(int countsPerSec) =>
       send(profile.velocity(countsPerSec));
 
+  @override
   Future<void> savePose(int slot) => send(profile.savePose(slot));
 
   @override
-  Future<void> recallPose(int slot, {required MotionParams motion}) => send(
+  Future<void> recallPose(int slot, {required MotionSettings settings}) => send(
         profile.gotoPose(
           slot,
-          speed: motion.pair,
-          accel: motion.pair,
-          extra: motion.extra,
+          speed: settings.speedPair(kind),
+          accel: settings.accelPair(kind),
+          extra: settings.extra(kind),
         ),
       );
 

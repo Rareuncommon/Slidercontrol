@@ -10,6 +10,7 @@ import 'dart:async';
 import 'package:test/test.dart';
 
 import '../lib/ble/ek_snapshot.dart';
+import '../lib/control/motion_settings.dart';
 import '../lib/control/ping_pong.dart';
 import '../lib/ek_protocol.dart';
 
@@ -31,6 +32,8 @@ class FakeDevice implements EkMotionTarget {
   final _controller = StreamController<EkSnapshot>.broadcast();
 
   final recalls = <int>[];
+  final saves = <int>[];
+  final velocities = <int>[];
   int stops = 0;
 
   /// Set to make the next recall throw.
@@ -43,7 +46,7 @@ class FakeDevice implements EkMotionTarget {
   Stream<EkSnapshot> get snapshots => _controller.stream;
 
   @override
-  Future<void> recallPose(int slot, {required MotionParams motion}) async {
+  Future<void> recallPose(int slot, {required MotionSettings settings}) async {
     final f = failNextRecall;
     if (f != null) {
       failNextRecall = null;
@@ -51,6 +54,13 @@ class FakeDevice implements EkMotionTarget {
     }
     recalls.add(slot);
   }
+
+  @override
+  Future<void> savePose(int slot) async => saves.add(slot);
+
+  @override
+  Future<void> setVelocity(int countsPerSec) async =>
+      velocities.add(countsPerSec);
 
   @override
   Future<void> stopMotion() async => stops++;
@@ -78,8 +88,40 @@ Future<void> completeAMove(
   d.setState(EkState.idle);
 }
 
+/// Waits for [condition], polling. Used instead of fixed sleeps so the tests
+/// are not racing the supervisor's 50 ms sample tick.
+Future<void> waitFor(
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 5),
+  String? describe,
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    if (condition()) return;
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+  throw StateError('timed out waiting for ${describe ?? 'condition'}');
+}
+
+/// Acts as the device: whenever the controller issues a recall, run a move and
+/// then hold idle long enough for the settle window to elapse.
+Future<void> serviceLegs(
+  FakeDevice d, {
+  required int legs,
+  required Duration settle,
+}) async {
+  var handled = 0;
+  while (handled < legs) {
+    await waitFor(() => d.recalls.length > handled,
+        describe: 'recall ${handled + 1}');
+    handled = d.recalls.length;
+    await completeAMove(d);
+    await Future<void>.delayed(settle + const Duration(milliseconds: 120));
+  }
+}
+
 void main() {
-  final motion = MotionParams.fromPercent(50, EkKind.slider);
+  const motion = MotionSettings(speedPercent: 50, accelPercent: 50);
   const settle = Duration(milliseconds: 60);
   const grace = Duration(milliseconds: 200);
 
@@ -90,11 +132,7 @@ void main() {
 
       unawaited(c.start(motion: motion, settle: settle, launchGrace: grace));
 
-      for (var i = 0; i < 4; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        await completeAMove(d);
-        await Future<void>.delayed(settle + const Duration(milliseconds: 60));
-      }
+      await serviceLegs(d, legs: 4, settle: settle);
       await c.stop();
 
       expect(d.recalls.length, greaterThanOrEqualTo(4));
@@ -243,7 +281,7 @@ void main() {
 
       final c = PingPongController(target: d);
       unawaited(c.start(
-        motion: MotionParams.fromPercent(50, EkKind.head),
+        motion: const MotionSettings(),
         blindLeg: const Duration(milliseconds: 80),
       ));
 
@@ -262,7 +300,7 @@ void main() {
       final c = PingPongController(target: d);
 
       unawaited(c.start(
-        motion: MotionParams.fromPercent(50, EkKind.head),
+        motion: const MotionSettings(),
         blindLeg: const Duration(seconds: 30),
       ));
       await Future<void>.delayed(const Duration(milliseconds: 40));
@@ -287,11 +325,7 @@ void main() {
       final c = PingPongController(target: d);
 
       unawaited(c.start(motion: motion, settle: settle, launchGrace: grace));
-      for (var i = 0; i < 3; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-        await completeAMove(d);
-        await Future<void>.delayed(settle + const Duration(milliseconds: 60));
-      }
+      await serviceLegs(d, legs: 3, settle: settle);
       await c.stop();
 
       // More than one recall means the host is driving the repetition, which is
