@@ -9,6 +9,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
+import 'ble/ek_adapter.dart';
 import 'ble/ek_connection.dart';
 import 'ble/ek_permissions.dart';
 import 'ble/ek_scanner.dart';
@@ -78,7 +79,11 @@ class _DeviceListPageState extends State<DeviceListPage>
     return out;
   }
   String? _message;
+  bool _needsSettings = false;
   bool _busy = false;
+
+  StreamSubscription<BluetoothAdapterState>? _adapterSub;
+  BluetoothAdapterState _adapter = BluetoothAdapterState.unknown;
 
   @override
   void initState() {
@@ -87,11 +92,27 @@ class _DeviceListPageState extends State<DeviceListPage>
     _scanner.devices.listen((d) {
       if (mounted) setState(() => _found = d);
     });
+
+    // Listening from startup is what triggers CoreBluetooth to initialise, and
+    // therefore what raises the macOS Bluetooth permission prompt — before the
+    // user presses anything.
+    _adapterSub = FlutterBluePlus.adapterState.listen((s) {
+      if (!mounted) return;
+      setState(() {
+        _adapter = s;
+        // Clear a stale complaint once the adapter is genuinely usable.
+        if (s == BluetoothAdapterState.on && _needsSettings) {
+          _message = null;
+          _needsSettings = false;
+        }
+      });
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _adapterSub?.cancel();
     for (final s in _snapSubs.values) {
       s.cancel();
     }
@@ -117,21 +138,48 @@ class _DeviceListPageState extends State<DeviceListPage>
     }
   }
 
+  /// permission_handler cannot open settings on every platform, so a failure
+  /// falls back to telling the user where to go rather than a dead button.
+  Future<void> _openSettings() async {
+    final opened = await EkPermissions.openSettings();
+    if (!mounted || opened) return;
+    setState(() => _message =
+        'Could not open Settings automatically. Open System Settings → '
+        'Privacy & Security → Bluetooth and enable Slidercontrol, then scan '
+        'again.');
+  }
+
   Future<void> _scan() async {
     setState(() {
       _busy = true;
       _message = null;
+      _needsSettings = false;
     });
     try {
       if (await FlutterBluePlus.isSupported == false) {
         setState(() => _message = 'Bluetooth is not supported on this device.');
         return;
       }
+
       final denied = await EkPermissions.request();
       if (denied != null) {
         setState(() => _message = denied);
         return;
       }
+
+      // Wait for CoreBluetooth to actually know its own state. Scanning while
+      // it is still `unknown` throws "bluetooth must be turned on" even when
+      // Bluetooth is on and about to report itself as such.
+      final status = await EkAdapter.waitUntilReady();
+      if (!mounted) return;
+      if (!status.canScan) {
+        setState(() {
+          _message = status.problem;
+          _needsSettings = status.needsSettings;
+        });
+        return;
+      }
+
       await _scanner.start();
     } catch (e) {
       setState(() => _message = '$e');
@@ -236,12 +284,42 @@ class _DeviceListPageState extends State<DeviceListPage>
               width: double.infinity,
               color: Theme.of(context).colorScheme.errorContainer,
               padding: const EdgeInsets.all(12),
-              child: Text(
-                _message!,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onErrorContainer,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _message!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onErrorContainer,
+                    ),
+                  ),
+                  if (_needsSettings)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Row(
+                        children: [
+                          FilledButton.tonal(
+                            onPressed: _openSettings,
+                            child: const Text('Open Settings'),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton.tonal(
+                            onPressed: _busy ? null : _scan,
+                            child: const Text('Try again'),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
+            ),
+          if (_adapter != BluetoothAdapterState.on)
+            Container(
+              width: double.infinity,
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Text('Bluetooth: ${_adapter.name}',
+                  style: Theme.of(context).textTheme.bodySmall),
             ),
           if (_busy) const LinearProgressIndicator(),
           Expanded(

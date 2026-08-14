@@ -60,7 +60,18 @@ class EkPermissions {
   }
 
   /// Opens the OS settings page, for the permanently-denied case.
-  static Future<bool> openSettings() => openAppSettings();
+  ///
+  /// Returns false if it could not be opened — permission_handler does not
+  /// implement this on every platform, and macOS in particular may throw. The
+  /// caller should fall back to telling the user where to go by hand rather
+  /// than leaving a button that appears to do nothing.
+  static Future<bool> openSettings() async {
+    try {
+      return await openAppSettings();
+    } catch (_) {
+      return false;
+    }
+  }
 
   static String _label(Permission p) {
     if (p == Permission.bluetoothScan) return 'Bluetooth scan';
