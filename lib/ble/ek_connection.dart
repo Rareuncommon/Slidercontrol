@@ -9,90 +9,16 @@
 library;
 
 import 'dart:async';
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../ek_protocol.dart';
+import 'ek_snapshot.dart';
 
-enum EkLinkState { disconnected, connecting, discovering, ready, failed }
+export 'ek_snapshot.dart' show EkLinkState, EkSnapshot, EkMotionTarget;
 
-/// Everything the UI needs to know about a device at one instant.
-@immutable
-class EkSnapshot {
-  final EkLinkState link;
-  final EkKind kind;
-
-  /// Motion state from the last usable telemetry frame. The head reports
-  /// [EkState.unknown] — its frames carry no state byte we have decoded (§5).
-  final EkState state;
-  final int? batteryPercent;
-
-  /// Unwrapped, continuous position. Slider only; null for the head, which does
-  /// not report position at all (§5).
-  ///
-  /// The absolute value is arbitrary — it is not preserved across sessions and
-  /// has no fixed relationship to any point on the rail.
-  final int? position;
-
-  final DateTime? lastFrameAt;
-  final int framesReceived;
-
-  /// Frames whose trailing checksum did not match. Surfaced rather than hidden:
-  /// a non-zero count here means the framing assumption in §2 does not hold for
-  /// some notification the device actually sends, which is worth knowing.
-  final int checksumFailures;
-
-  final String? error;
-
-  const EkSnapshot({
-    required this.link,
-    required this.kind,
-    this.state = EkState.unknown,
-    this.batteryPercent,
-    this.position,
-    this.lastFrameAt,
-    this.framesReceived = 0,
-    this.checksumFailures = 0,
-    this.error,
-  });
-
-  bool get isReady => link == EkLinkState.ready;
-
-  /// True once telemetry is genuinely flowing. Nothing arrives without the
-  /// keepalive, so this is the check that distinguishes "connected" from
-  /// "connected and actually polling" (§7).
-  bool get isReporting =>
-      lastFrameAt != null &&
-      DateTime.now().difference(lastFrameAt!) < const Duration(seconds: 3);
-
-  EkSnapshot copyWith({
-    EkLinkState? link,
-    EkState? state,
-    int? batteryPercent,
-    int? position,
-    DateTime? lastFrameAt,
-    int? framesReceived,
-    int? checksumFailures,
-    String? error,
-    bool clearError = false,
-    bool clearPosition = false,
-  }) {
-    return EkSnapshot(
-      link: link ?? this.link,
-      kind: kind,
-      state: state ?? this.state,
-      batteryPercent: batteryPercent ?? this.batteryPercent,
-      position: clearPosition ? null : (position ?? this.position),
-      lastFrameAt: lastFrameAt ?? this.lastFrameAt,
-      framesReceived: framesReceived ?? this.framesReceived,
-      checksumFailures: checksumFailures ?? this.checksumFailures,
-      error: clearError ? null : (error ?? this.error),
-    );
-  }
-}
-
-class EkConnection {
+class EkConnection implements EkMotionTarget {
   EkConnection({required this.device, required this.profile, this.name = ''})
       : _snapshot = EkSnapshot(
           link: EkLinkState.disconnected,
@@ -103,10 +29,15 @@ class EkConnection {
   final EkProfile profile;
   final String name;
 
+  @override
+  EkKind get kind => profile.kind;
+
   final _snapshots = StreamController<EkSnapshot>.broadcast();
+  @override
   Stream<EkSnapshot> get snapshots => _snapshots.stream;
 
   EkSnapshot _snapshot;
+  @override
   EkSnapshot get snapshot => _snapshot;
 
   final _tracker = PositionTracker();
@@ -276,6 +207,7 @@ class EkConnection {
     return result;
   }
 
+  @override
   Future<void> stopMotion() => send(profile.stop());
 
   Future<void> setVelocity(int countsPerSec) =>
@@ -283,6 +215,7 @@ class EkConnection {
 
   Future<void> savePose(int slot) => send(profile.savePose(slot));
 
+  @override
   Future<void> recallPose(int slot, {required MotionParams motion}) => send(
         profile.gotoPose(
           slot,
