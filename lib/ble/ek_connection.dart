@@ -43,6 +43,19 @@ class EkConnection implements EkMotionTarget {
 
   final _tracker = PositionTracker();
 
+  /// A rolling window of raw notification frames, newest last.
+  ///
+  /// Kept because §8 still lists undecoded fields — the head's position, the
+  /// `70 80` constant, the head goto tail. Seeing the actual bytes a device
+  /// sends is how those get closed, and it costs nothing to retain a few
+  /// hundred frames.
+  final _frameLog = <EkFrameRecord>[];
+  static const frameLogLimit = 400;
+
+  List<EkFrameRecord> get frameLog => List.unmodifiable(_frameLog);
+
+  void clearFrameLog() => _frameLog.clear();
+
   BluetoothCharacteristic? _write;
   BluetoothCharacteristic? _notify;
   StreamSubscription<List<int>>? _notifySub;
@@ -233,8 +246,18 @@ class EkConnection implements EkMotionTarget {
   void _onFrame(List<int> frame) {
     if (frame.isEmpty) return;
 
+    final checksumOk = verifyChecksum(frame);
+    _frameLog.add(EkFrameRecord(
+      at: DateTime.now(),
+      bytes: List.unmodifiable(frame),
+      checksumOk: checksumOk,
+    ));
+    if (_frameLog.length > frameLogLimit) {
+      _frameLog.removeRange(0, _frameLog.length - frameLogLimit);
+    }
+
     var failures = _snapshot.checksumFailures;
-    if (!verifyChecksum(frame)) {
+    if (!checksumOk) {
       // Counted, not dropped. §2 says the sum-16 rule holds in both directions;
       // if hardware disagrees for some frame type, that is a gap in the spec
       // worth seeing rather than a frame worth silently discarding.

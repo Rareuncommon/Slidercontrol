@@ -142,6 +142,30 @@ class _DeviceListPageState extends State<DeviceListPage>
     await c?.dispose();
   }
 
+  /// Stops every connected device at once.
+  ///
+  /// The button you want when something is moving and you do not want to be
+  /// navigating to find the right screen first.
+  Future<void> _stopAll() async {
+    final live = _connections.values.where((c) => c.snapshot.isReady).toList();
+    if (live.isEmpty) return;
+    final failures = <String>[];
+    for (final c in live) {
+      try {
+        await c.stopMotion();
+      } catch (e) {
+        failures.add('${c.name}: $e');
+      }
+    }
+    if (!mounted) return;
+    setState(() => _message = failures.isEmpty ? null : failures.join('\n'));
+    if (failures.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Stopped ${live.length} device(s)')),
+      );
+    }
+  }
+
   void _open(EkConnection c) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => DevicePanel(connection: c)),
@@ -163,6 +187,24 @@ class _DeviceListPageState extends State<DeviceListPage>
       ),
       body: Column(
         children: [
+          if (_connections.values.any((c) => c.snapshot.isReady))
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: SizedBox(
+                height: 56,
+                width: double.infinity,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.red.shade700,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: _stopAll,
+                  icon: const Icon(Icons.stop_circle),
+                  label: const Text('STOP ALL',
+                      style: TextStyle(fontSize: 18)),
+                ),
+              ),
+            ),
           if (_message != null)
             Container(
               width: double.infinity,

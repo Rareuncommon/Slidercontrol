@@ -40,7 +40,9 @@ A motor is attached to a camera. These are not theoretical.
 | `lib/control/motion_settings.dart` | Speed/acceleration percentages → wire values. |
 | `lib/control/jog.dart` | Streamed velocity while held. |
 | `lib/control/ping_pong.dart` | Host-supervised loop between two poses. |
-| `lib/ui/`, `lib/main.dart` | Device list and per-device controls. |
+| `lib/ui/device_panel.dart` | Per-device controls. |
+| `lib/ui/frame_inspector.dart` | Raw notification frames, for decoding §8. |
+| `lib/main.dart` | Device list and global stop. |
 
 Everything above `ek_connection.dart` depends on the `EkMotionTarget` interface
 rather than on BLE, so the motion logic is unit-tested against a fake device.
@@ -52,7 +54,7 @@ flutter pub get
 dart test
 ```
 
-70 tests, no hardware and no Flutter binding required. They cover the protocol
+73 tests, no hardware and no Flutter binding required. They cover the protocol
 against the captured bytes, plus the motion logic — including that a stop goes
 out on every exit path: normal completion, user stop, lost link, timed-out leg,
 and a write that throws.
@@ -77,8 +79,11 @@ These come from the spec, not from the implementation:
 
 - **The HeadONE reports no motion state and no position** (§5). Ping-pong on the
   head therefore runs blind on a fixed timer instead of waiting for each move to
-  finish. The slider is properly supervised. Decoding the head's 16-byte
-  `0x05` message would fix this.
+  finish (adjustable in the UI, since only you can see how long a leg really
+  takes). The slider is properly supervised. Decoding the head's 16-byte
+  `0x05` message would fix this — the **Raw frames** screen, reachable from the
+  device panel, exists for exactly that: it logs every notification verbatim,
+  can hide the routine telemetry, and copies to the clipboard.
 - **Speed vs acceleration is unestablished** (§7b). The two `u16` slots are
   symmetric in every captured frame and were always set together, so independent
   sliders rest on an assumption. Setting both to the same value reproduces

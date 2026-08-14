@@ -112,3 +112,39 @@ abstract class EkMotionTarget {
 
   Future<void> stopMotion();
 }
+
+/// One raw notification frame, as received.
+///
+/// Retained verbatim — no interpretation — so undecoded messages can be read
+/// off the wire. EDELKRONE_PROTOCOL.md §8 still lists several.
+class EkFrameRecord {
+  final DateTime at;
+  final List<int> bytes;
+  final bool checksumOk;
+
+  const EkFrameRecord({
+    required this.at,
+    required this.bytes,
+    required this.checksumOk,
+  });
+
+  /// Message type — the first byte. Not a length, in this direction (§2).
+  int get messageType => bytes.isEmpty ? -1 : bytes[0];
+
+  String get hex =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ');
+
+  String get timestamp {
+    final t = at;
+    final ms = t.millisecond.toString().padLeft(3, '0');
+    return '${t.hour.toString().padLeft(2, '0')}:'
+        '${t.minute.toString().padLeft(2, '0')}:'
+        '${t.second.toString().padLeft(2, '0')}.$ms';
+  }
+
+  /// A line suited to pasting into a protocol note or a diff against a capture.
+  String toLogLine() =>
+      '$timestamp  len=${bytes.length.toString().padLeft(3)}  '
+      'type=0x${messageType.toRadixString(16).padLeft(2, '0')}  '
+      '${checksumOk ? '   ' : 'BAD'}  $hex';
+}

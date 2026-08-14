@@ -79,9 +79,13 @@ class FakeDevice implements EkMotionTarget {
 }
 
 /// Drives a fake slider through a realistic move: idle, then moving, then idle.
+///
+/// The moving window must be comfortably longer than the supervisor's 50 ms
+/// sample tick, or the fake can start and finish the move between two samples
+/// and the supervisor never observes motion at all. Real moves last seconds.
 Future<void> completeAMove(
   FakeDevice d, {
-  Duration moving = const Duration(milliseconds: 40),
+  Duration moving = const Duration(milliseconds: 160),
 }) async {
   d.setState(EkState.keyposeMove);
   await Future<void>.delayed(moving);
@@ -332,6 +336,81 @@ void main() {
       // the whole point — a single fired-and-forgotten loop command would show
       // up here as exactly one.
       expect(d.recalls.length, greaterThan(1));
+      await d.close();
+    });
+  });
+
+  group('dwell and leg limits', () {
+    test('stops itself after the configured number of legs', () async {
+      final d = FakeDevice(EkKind.slider);
+      final c = PingPongController(target: d);
+
+      final run = c.start(
+        motion: motion,
+        settle: settle,
+        launchGrace: grace,
+        maxLegs: 2,
+      );
+      await serviceLegs(d, legs: 2, settle: settle);
+      await run;
+
+      expect(d.recalls.length, 2, reason: 'recalls were ${d.recalls}');
+      expect(c.isRunning, isFalse);
+      expect(c.status.phase, PingPongPhase.stopped);
+      expect(c.status.error, isNull, reason: 'a leg limit is not a failure');
+      expect(d.stops, greaterThan(0));
+      await d.close();
+    });
+
+    test('dwell holds between legs rather than reversing immediately',
+        () async {
+      final d = FakeDevice(EkKind.slider);
+      final c = PingPongController(target: d);
+
+      unawaited(c.start(
+        motion: motion,
+        settle: settle,
+        launchGrace: grace,
+        dwell: const Duration(milliseconds: 400),
+      ));
+
+      // Complete the first leg.
+      await waitFor(() => d.recalls.isNotEmpty);
+      await completeAMove(d);
+      await waitFor(() => c.status.phase == PingPongPhase.dwelling,
+          describe: 'the dwell to begin');
+
+      // The leg is done, but the next recall must wait out the dwell.
+      expect(d.recalls.length, 1, reason: 'dwell should delay the next leg');
+
+      await waitFor(() => d.recalls.length > 1, describe: 'the dwell to end');
+      expect(d.recalls.length, 2);
+
+      await c.stop();
+      await d.close();
+    });
+
+    test('a dwell is interruptible', () async {
+      final d = FakeDevice(EkKind.slider);
+      final c = PingPongController(target: d);
+
+      unawaited(c.start(
+        motion: motion,
+        settle: settle,
+        launchGrace: grace,
+        dwell: const Duration(seconds: 30),
+      ));
+      await waitFor(() => d.recalls.isNotEmpty);
+      await completeAMove(d);
+      await waitFor(() => c.status.phase == PingPongPhase.dwelling,
+          describe: 'the dwell to begin');
+
+      final sw = Stopwatch()..start();
+      await c.stop();
+      sw.stop();
+
+      expect(sw.elapsed, lessThan(const Duration(seconds: 2)));
+      expect(d.stops, greaterThan(0));
       await d.close();
     });
   });

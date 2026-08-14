@@ -10,6 +10,7 @@ import '../control/jog.dart';
 import '../control/motion_settings.dart';
 import '../control/ping_pong.dart';
 import '../ek_protocol.dart';
+import 'frame_inspector.dart';
 
 class DevicePanel extends StatefulWidget {
   const DevicePanel({super.key, required this.connection});
@@ -26,6 +27,19 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
       PingPongController(target: widget.connection);
 
   MotionSettings _settings = const MotionSettings();
+
+  // Ping-pong tuning. Defaults match the spec (§7 says ~0.6 s of held idle);
+  // the blind leg is a guess about the hardware, so it is adjustable.
+  double _settleMs = PingPongController.defaultSettle.inMilliseconds.toDouble();
+  double _dwellSeconds = 0;
+  double _blindLegSeconds =
+      PingPongController.defaultBlindLeg.inSeconds.toDouble();
+  int _maxLegs = 0;
+
+  /// Position when the panel opened, so travel can be shown as a delta. The
+  /// absolute counter is arbitrary and has no fixed relationship to the rail
+  /// (§5), so only differences mean anything.
+  int? _positionOrigin;
   StreamSubscription<EkSnapshot>? _snapSub;
   StreamSubscription<PingPongStatus>? _ppSub;
   String? _error;
@@ -104,7 +118,15 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
     }
     await _guard(_jog.stop);
     // Not awaited: the loop runs until stopped.
-    unawaited(_pingPong.start(motion: _settings).catchError((Object e) {
+    unawaited(_pingPong
+        .start(
+      motion: _settings,
+      settle: Duration(milliseconds: _settleMs.round()),
+      dwell: Duration(milliseconds: (_dwellSeconds * 1000).round()),
+      blindLeg: Duration(milliseconds: (_blindLegSeconds * 1000).round()),
+      maxLegs: _maxLegs,
+    )
+        .catchError((Object e) {
       _report('$e');
     }));
     setState(() {});
@@ -116,7 +138,20 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: Text(_c.name.isEmpty ? _c.profile.name : _c.name)),
+      appBar: AppBar(
+        title: Text(_c.name.isEmpty ? _c.profile.name : _c.name),
+        actions: [
+          IconButton(
+            tooltip: 'Raw frames',
+            icon: const Icon(Icons.data_object),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => FrameInspector(connection: _c),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -181,9 +216,30 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
               ),
             const Divider(),
             Text('state: ${s.state.name}'),
-            if (_isSlider)
-              Text('position: ${s.position?.toString() ?? '—'}')
-            else
+            if (_isSlider) ...[
+              Text('position: ${s.position?.toString() ?? '—'} counts'),
+              if (s.position != null && _positionOrigin != null)
+                Text(
+                  'travelled: ${s.position! - _positionOrigin!} counts '
+                  '(${((s.position! - _positionOrigin!).abs() / EkRig.sliderTravelCounts * 100).toStringAsFixed(1)}% of rail)',
+                  style: theme.textTheme.bodySmall,
+                ),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: s.position == null
+                        ? null
+                        : () => setState(() => _positionOrigin = s.position),
+                    child: const Text('Zero here'),
+                  ),
+                  Text(
+                    'Absolute counts are arbitrary (§5); only deltas mean '
+                    'anything.',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ] else
               Text(
                 'position: not reported by the head (§5)',
                 style: theme.textTheme.bodySmall,
@@ -209,6 +265,29 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
         icon: const Icon(Icons.stop_circle, size: 28),
         label: const Text('STOP', style: TextStyle(fontSize: 20)),
       ),
+    );
+  }
+
+  Widget _slider({
+    required String label,
+    required double value,
+    required double min,
+    required double max,
+    required String display,
+    required ValueChanged<double> onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('$label — $display',
+            style: Theme.of(context).textTheme.bodySmall),
+        Slider(
+          value: value.clamp(min, max),
+          min: min,
+          max: max,
+          onChanged: _pingPong.isRunning ? null : onChanged,
+        ),
+      ],
     );
   }
 
@@ -356,6 +435,55 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
                   'on a fixed timer rather than waiting for the move to finish. '
                   'Watch it.',
           style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 8),
+        if (_isSlider)
+          _slider(
+            label: 'Settle — idle must hold this long before the next leg',
+            value: _settleMs,
+            min: 200,
+            max: 2000,
+            display: '${_settleMs.round()} ms',
+            onChanged: (v) => setState(() => _settleMs = v),
+          )
+        else
+          _slider(
+            label: 'Leg duration — how long to wait, since the head reports '
+                'nothing to wait on',
+            value: _blindLegSeconds,
+            min: 1,
+            max: 60,
+            display: '${_blindLegSeconds.toStringAsFixed(0)} s',
+            onChanged: (v) => setState(() => _blindLegSeconds = v),
+          ),
+        _slider(
+          label: 'Dwell at each end',
+          value: _dwellSeconds,
+          min: 0,
+          max: 30,
+          display: _dwellSeconds < 0.5
+              ? 'none — reverse immediately'
+              : '${_dwellSeconds.toStringAsFixed(0)} s',
+          onChanged: (v) => setState(() => _dwellSeconds = v),
+        ),
+        Row(
+          children: [
+            const Text('Stop after'),
+            const SizedBox(width: 12),
+            DropdownButton<int>(
+              value: _maxLegs,
+              items: const [
+                DropdownMenuItem(value: 0, child: Text('unlimited')),
+                DropdownMenuItem(value: 2, child: Text('1 round trip')),
+                DropdownMenuItem(value: 4, child: Text('2 round trips')),
+                DropdownMenuItem(value: 10, child: Text('5 round trips')),
+                DropdownMenuItem(value: 20, child: Text('10 round trips')),
+              ],
+              onChanged: _pingPong.isRunning
+                  ? null
+                  : (v) => setState(() => _maxLegs = v ?? 0),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         Row(

@@ -35,6 +35,9 @@ enum PingPongPhase {
   /// Running blind on a timer because the device reports no state (the head).
   timing,
 
+  /// Holding still at one end before starting the next leg.
+  dwelling,
+
   failed,
 }
 
@@ -89,7 +92,14 @@ class PingPongController {
   static const defaultMoveTimeout = Duration(seconds: 90);
 
   /// Blind leg duration for a device that reports no state — i.e. the head.
+  ///
+  /// Pure guesswork about the hardware: it has to cover the longest move
+  /// between the two poses, and there is no way to measure that from the head
+  /// itself. Adjustable from the UI for exactly that reason.
   static const defaultBlindLeg = Duration(seconds: 8);
+
+  /// Pause at each end before starting the next leg. Zero reverses immediately.
+  static const defaultDwell = Duration.zero;
 
   /// How often the supervisor samples device state. Telemetry arrives at about
   /// 3.3 Hz, so this oversamples comfortably.
@@ -114,6 +124,8 @@ class PingPongController {
     Duration launchGrace = defaultLaunchGrace,
     Duration moveTimeout = defaultMoveTimeout,
     Duration blindLeg = defaultBlindLeg,
+    Duration dwell = defaultDwell,
+    int maxLegs = 0,
   }) {
     if (_running) return _loop ?? Future<void>.value();
     _running = true;
@@ -123,6 +135,8 @@ class PingPongController {
       launchGrace: launchGrace,
       moveTimeout: moveTimeout,
       blindLeg: blindLeg,
+      dwell: dwell,
+      maxLegs: maxLegs,
     );
     return _loop!;
   }
@@ -157,6 +171,8 @@ class PingPongController {
     required Duration launchGrace,
     required Duration moveTimeout,
     required Duration blindLeg,
+    required Duration dwell,
+    required int maxLegs,
   }) async {
     var slot = slotA;
     var legs = 0;
@@ -196,7 +212,17 @@ class PingPongController {
         }
 
         legs++;
+        if (maxLegs > 0 && legs >= maxLegs) break;
         slot = slot == slotA ? slotB : slotA;
+
+        if (dwell > Duration.zero) {
+          _emit(PingPongStatus(
+            phase: PingPongPhase.dwelling,
+            slot: slot,
+            legs: legs,
+          ));
+          if (!await _sleep(dwell)) break;
+        }
       }
     } catch (e) {
       error = '$e';
@@ -304,6 +330,16 @@ class PingPongController {
       if (!target.snapshot.isReady) return _Leg.linkLost;
     }
     return _Leg.done;
+  }
+
+  /// An interruptible sleep. Returns false if the loop was stopped partway.
+  Future<bool> _sleep(Duration d) async {
+    final until = DateTime.now().add(d);
+    while (DateTime.now().isBefore(until)) {
+      await Future<void>.delayed(_tick);
+      if (!_running) return false;
+    }
+    return true;
   }
 
   void _emit(PingPongStatus s) {
