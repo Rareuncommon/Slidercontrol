@@ -52,10 +52,11 @@ A motor is attached to a camera. These are not theoretical.
 | `lib/control/leg_supervisor.dart` | One leg of motion, supervised. Pure. Shared. |
 | `lib/control/ping_pong.dart` | Host-supervised loop between two poses. |
 | `lib/control/fleet.dart` | Several devices moving together. Pure. |
-| `lib/ui/device_panel.dart` | Per-device controls. |
-| `lib/ui/fleet_panel.dart` | Multi-device controls. |
+| `lib/ui/control_page.dart` | The single control page: both devices plus shared controls. |
+| `lib/ui/device_column.dart` | One device's controls, as a column. |
+| `lib/ui/ui_scale.dart` | Shared spacing, type and the Section/Caution widgets. |
 | `lib/ui/frame_inspector.dart` | Raw notification frames, for decoding §8. |
-| `lib/main.dart` | Device list and global stop. |
+| `lib/main.dart` | Device list (entry point only) and global stop. |
 
 Everything above `ek_connection.dart` depends on the `EkMotionTarget` interface
 rather than on BLE, so the motion logic is unit-tested against a fake device.
@@ -67,7 +68,7 @@ flutter pub get
 dart test
 ```
 
-97 tests, no hardware and no Flutter binding required. They cover the protocol
+99 tests, no hardware and no Flutter binding required. They cover the protocol
 against the captured bytes, plus the motion logic — including that a stop goes
 out on every exit path: normal completion, user stop, lost link, timed-out leg,
 and a write that throws.

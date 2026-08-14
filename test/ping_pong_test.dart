@@ -414,4 +414,37 @@ void main() {
       await d.close();
     });
   });
+
+  group('leg timing', () {
+    test('reports how long the last completed leg took', () async {
+      final d = FakeDevice(EkKind.slider);
+      final c = PingPongController(target: d);
+
+      unawaited(c.start(motion: motion, settle: settle, launchGrace: grace));
+      await serviceLegs(d, legs: 1, settle: settle);
+      await waitFor(() => c.status.lastLeg != null,
+          describe: 'a completed leg');
+      final measured = c.status.lastLeg!;
+      await c.stop();
+
+      // The fake moves for 160 ms and then settles for 60 ms, so the leg is at
+      // least that. An upper bound keeps it honest that this is the leg and not
+      // the whole run.
+      expect(measured, greaterThan(const Duration(milliseconds: 150)));
+      expect(measured, lessThan(const Duration(seconds: 3)));
+      await d.close();
+    });
+
+    test('is null until a leg finishes', () async {
+      final d = FakeDevice(EkKind.slider);
+      final c = PingPongController(target: d);
+
+      unawaited(c.start(motion: motion, settle: settle, launchGrace: grace));
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+      expect(c.status.lastLeg, isNull);
+
+      await c.stop();
+      await d.close();
+    });
+  });
 }

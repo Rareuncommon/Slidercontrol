@@ -15,9 +15,8 @@ import 'ble/ek_permissions.dart';
 import 'ble/ek_scanner.dart';
 import 'control/stop_registry.dart';
 import 'ek_protocol.dart';
-import 'ui/device_panel.dart';
+import 'ui/control_page.dart';
 import 'ui/emergency_stop.dart';
-import 'ui/fleet_panel.dart';
 
 void main() {
   runApp(const SlidercontrolApp());
@@ -241,9 +240,15 @@ class _DeviceListPageState extends State<DeviceListPage>
     }
   }
 
-  void _open(EkConnection c) {
+  /// The device list is only an entry point — once connected, everything lives
+  /// on the control page.
+  void _openControls() {
+    final ready = _readyConnections;
+    if (ready.isEmpty) return;
     Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => DevicePanel(connection: c)),
+      MaterialPageRoute<void>(
+        builder: (_) => ControlPage(connections: ready),
+      ),
     );
   }
 
@@ -326,21 +331,18 @@ class _DeviceListPageState extends State<DeviceListPage>
               child: Text('Bluetooth: ${_adapter.name}',
                   style: Theme.of(context).textTheme.bodySmall),
             ),
-          if (_readyConnections.length >= 2)
+          if (_readyConnections.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
               child: SizedBox(
+                height: 52,
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) =>
-                          FleetPanel(connections: _readyConnections),
-                    ),
-                  ),
-                  icon: const Icon(Icons.sync_alt),
-                  label: Text(
-                      'Move ${_readyConnections.length} devices together'),
+                  onPressed: _openControls,
+                  icon: const Icon(Icons.tune),
+                  label: Text(_readyConnections.length == 1
+                      ? 'Open controls'
+                      : 'Open controls · ${_readyConnections.length} devices'),
                 ),
               ),
             ),
@@ -368,7 +370,7 @@ class _DeviceListPageState extends State<DeviceListPage>
                         onConnect: () => _connect(d),
                         onDisconnect: () => _disconnect(d.id),
                         onOpen: c != null && c.snapshot.isReady
-                            ? () => _open(c)
+                            ? _openControls
                             : null,
                       );
                     },
