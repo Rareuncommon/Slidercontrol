@@ -49,8 +49,11 @@ A motor is attached to a camera. These are not theoretical.
 | `lib/control/panel_settings.dart` | Panel settings, clamped. Pure. |
 | `lib/control/stop_registry.dart` | Every way to stop everything. Pure. |
 | `lib/control/jog.dart` | Streamed velocity while held. |
+| `lib/control/leg_supervisor.dart` | One leg of motion, supervised. Pure. Shared. |
 | `lib/control/ping_pong.dart` | Host-supervised loop between two poses. |
+| `lib/control/fleet.dart` | Several devices moving together. Pure. |
 | `lib/ui/device_panel.dart` | Per-device controls. |
+| `lib/ui/fleet_panel.dart` | Multi-device controls. |
 | `lib/ui/frame_inspector.dart` | Raw notification frames, for decoding §8. |
 | `lib/main.dart` | Device list and global stop. |
 
@@ -64,7 +67,7 @@ flutter pub get
 dart test
 ```
 
-88 tests, no hardware and no Flutter binding required. They cover the protocol
+97 tests, no hardware and no Flutter binding required. They cover the protocol
 against the captured bytes, plus the motion logic — including that a stop goes
 out on every exit path: normal completion, user stop, lost link, timed-out leg,
 and a write that throws.
@@ -99,7 +102,15 @@ These come from the spec, not from the implementation:
   sliders rest on an assumption. Setting both to the same value reproduces
   exactly what was captured; the UI says so when they differ.
 - **Only 1% and 100% were measured.** Everything between is modelled.
-- Coordinated slider + head moves and Point Tracking are not implemented (§8).
+- **Coordinated slider + head moves are not implemented** (§8). The official
+  app pairs the units and captures both axes into a single keypose; that path
+  was never captured, so nothing here reproduces it. "Move together" is
+  host-side coordination instead: each device gets an ordinary pose recall at
+  the same moment, and none starts its next leg until all have finished this
+  one. Within a leg the axes run at their own rates and can drift — match their
+  speeds if you need them to arrive together.
+- Point Tracking is not implemented (§8); it needs edelkrone's inverse
+  kinematics, not just the protocol.
 
 ## Licence note
 

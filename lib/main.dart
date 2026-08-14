@@ -17,6 +17,7 @@ import 'control/stop_registry.dart';
 import 'ek_protocol.dart';
 import 'ui/device_panel.dart';
 import 'ui/emergency_stop.dart';
+import 'ui/fleet_panel.dart';
 
 void main() {
   runApp(const SlidercontrolApp());
@@ -65,6 +66,10 @@ class _DeviceListPageState extends State<DeviceListPage>
   final _connectedInfo = <String, EkDiscovered>{};
 
   List<EkDiscovered> _found = const [];
+
+  /// Connections that can actually be driven right now.
+  List<EkConnection> get _readyConnections =>
+      _connections.values.where((c) => c.snapshot.isReady).toList();
 
   /// Everything to show: whatever the last scan saw, plus anything connected.
   List<EkDiscovered> get _visible {
@@ -320,6 +325,24 @@ class _DeviceListPageState extends State<DeviceListPage>
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               child: Text('Bluetooth: ${_adapter.name}',
                   style: Theme.of(context).textTheme.bodySmall),
+            ),
+          if (_readyConnections.length >= 2)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              child: SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          FleetPanel(connections: _readyConnections),
+                    ),
+                  ),
+                  icon: const Icon(Icons.sync_alt),
+                  label: Text(
+                      'Move ${_readyConnections.length} devices together'),
+                ),
+              ),
             ),
           if (_busy) const LinearProgressIndicator(),
           Expanded(
