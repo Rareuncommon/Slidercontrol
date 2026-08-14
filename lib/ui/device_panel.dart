@@ -8,7 +8,10 @@ import 'package:flutter/material.dart';
 import '../ble/ek_connection.dart';
 import '../control/jog.dart';
 import '../control/motion_settings.dart';
+import '../control/panel_settings.dart';
+import '../control/panel_settings_store.dart';
 import '../control/ping_pong.dart';
+import '../control/stop_registry.dart';
 import '../ek_protocol.dart';
 import 'frame_inspector.dart';
 
@@ -26,15 +29,13 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
   late final PingPongController _pingPong =
       PingPongController(target: widget.connection);
 
-  MotionSettings _settings = const MotionSettings();
+  /// Speed, acceleration and ping-pong tuning, restored from the last session.
+  /// Defaults match the spec (§7 says ~0.6 s of held idle); the blind leg is a
+  /// guess about hardware the head reports nothing about, so it is adjustable.
+  PanelSettings _panel = const PanelSettings();
+  late final PanelSettingsStore _store;
 
-  // Ping-pong tuning. Defaults match the spec (§7 says ~0.6 s of held idle);
-  // the blind leg is a guess about the hardware, so it is adjustable.
-  double _settleMs = PingPongController.defaultSettle.inMilliseconds.toDouble();
-  double _dwellSeconds = 0;
-  double _blindLegSeconds =
-      PingPongController.defaultBlindLeg.inSeconds.toDouble();
-  int _maxLegs = 0;
+  MotionSettings get _settings => _panel.motion;
 
   /// Position when the panel opened, so travel can be shown as a delta. The
   /// absolute counter is arbitrary and has no fixed relationship to the rail
@@ -57,11 +58,21 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
     _ppSub = _pingPong.statuses.listen((_) {
       if (mounted) setState(() {});
     });
+    // Register the FULL stop, not just the device write. Stopping the motor
+    // while the ping-pong loop still runs only pauses it — the next leg would
+    // start it again.
+    StopRegistry.instance.register(this, _emergencyStop);
+
+    _store = PanelSettingsStore(_c.kind.name);
+    _store.load().then((loaded) {
+      if (mounted) setState(() => _panel = loaded);
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    StopRegistry.instance.unregister(this);
     // Leaving this screen must not leave anything moving.
     _snapSub?.cancel();
     _ppSub?.cancel();
@@ -81,6 +92,14 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
     }
   }
 
+  /// The stop button and the Escape key stop every device, not just this one.
+  /// When something is going wrong, stopping only the screen you happen to be
+  /// looking at is rarely what is wanted.
+  Future<void> _stopEverything() async {
+    final failures = await StopRegistry.instance.stopAll();
+    if (failures.isNotEmpty) _report(failures.join('\n'));
+  }
+
   Future<void> _emergencyStop() async {
     await _jog.stop();
     await _pingPong.stop();
@@ -89,6 +108,11 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
     } catch (e) {
       _report('$e');
     }
+  }
+
+  void _update(PanelSettings next) {
+    setState(() => _panel = next);
+    _store.save(next);
   }
 
   void _report(String message) {
@@ -120,11 +144,11 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
     // Not awaited: the loop runs until stopped.
     unawaited(_pingPong
         .start(
-      motion: _settings,
-      settle: Duration(milliseconds: _settleMs.round()),
-      dwell: Duration(milliseconds: (_dwellSeconds * 1000).round()),
-      blindLeg: Duration(milliseconds: (_blindLegSeconds * 1000).round()),
-      maxLegs: _maxLegs,
+      motion: _panel.motion,
+      settle: _panel.settle,
+      dwell: _panel.dwell,
+      blindLeg: _panel.blindLeg,
+      maxLegs: _panel.maxLegs,
     )
         .catchError((Object e) {
       _report('$e');
@@ -261,7 +285,7 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
           backgroundColor: Colors.red.shade700,
           foregroundColor: Colors.white,
         ),
-        onPressed: () => _guard(_emergencyStop),
+        onPressed: () => _guard(_stopEverything),
         icon: const Icon(Icons.stop_circle, size: 28),
         label: const Text('STOP', style: TextStyle(fontSize: 20)),
       ),
@@ -301,9 +325,9 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
           min: 1,
           max: 100,
           onChanged: (v) {
-            setState(() => _settings = _settings.copyWith(speedPercent: v));
+            _update(_panel.copyWith(motion: _settings.copyWith(speedPercent: v)));
             // Takes effect immediately if a jog is in progress.
-            _jog.setVelocity(_settings.jogVelocity());
+            _jog.setVelocity(_panel.motion.jogVelocity());
           },
         ),
         Text('Acceleration  ${_settings.accelPercent.round()}%'),
@@ -311,8 +335,8 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
           value: _settings.accelPercent,
           min: 1,
           max: 100,
-          onChanged: (v) =>
-              setState(() => _settings = _settings.copyWith(accelPercent: v)),
+          onChanged: (v) => _update(
+              _panel.copyWith(motion: _settings.copyWith(accelPercent: v))),
         ),
         if (!_settings.isCaptureFaithful)
           Padding(
@@ -440,38 +464,38 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
         if (_isSlider)
           _slider(
             label: 'Settle — idle must hold this long before the next leg',
-            value: _settleMs,
-            min: 200,
-            max: 2000,
-            display: '${_settleMs.round()} ms',
-            onChanged: (v) => setState(() => _settleMs = v),
+            value: _panel.settleMs,
+            min: PanelSettings.settleMin,
+            max: PanelSettings.settleMax,
+            display: '${_panel.settleMs.round()} ms',
+            onChanged: (v) => _update(_panel.copyWith(settleMs: v)),
           )
         else
           _slider(
             label: 'Leg duration — how long to wait, since the head reports '
                 'nothing to wait on',
-            value: _blindLegSeconds,
-            min: 1,
-            max: 60,
-            display: '${_blindLegSeconds.toStringAsFixed(0)} s',
-            onChanged: (v) => setState(() => _blindLegSeconds = v),
+            value: _panel.blindLegSeconds,
+            min: PanelSettings.blindLegMin,
+            max: PanelSettings.blindLegMax,
+            display: '${_panel.blindLegSeconds.toStringAsFixed(0)} s',
+            onChanged: (v) => _update(_panel.copyWith(blindLegSeconds: v)),
           ),
         _slider(
           label: 'Dwell at each end',
-          value: _dwellSeconds,
-          min: 0,
-          max: 30,
-          display: _dwellSeconds < 0.5
+          value: _panel.dwellSeconds,
+          min: PanelSettings.dwellMin,
+          max: PanelSettings.dwellMax,
+          display: _panel.dwellSeconds < 0.5
               ? 'none — reverse immediately'
-              : '${_dwellSeconds.toStringAsFixed(0)} s',
-          onChanged: (v) => setState(() => _dwellSeconds = v),
+              : '${_panel.dwellSeconds.toStringAsFixed(0)} s',
+          onChanged: (v) => _update(_panel.copyWith(dwellSeconds: v)),
         ),
         Row(
           children: [
             const Text('Stop after'),
             const SizedBox(width: 12),
             DropdownButton<int>(
-              value: _maxLegs,
+              value: _panel.maxLegs,
               items: const [
                 DropdownMenuItem(value: 0, child: Text('unlimited')),
                 DropdownMenuItem(value: 2, child: Text('1 round trip')),
@@ -481,7 +505,7 @@ class _DevicePanelState extends State<DevicePanel> with WidgetsBindingObserver {
               ],
               onChanged: _pingPong.isRunning
                   ? null
-                  : (v) => setState(() => _maxLegs = v ?? 0),
+                  : (v) => _update(_panel.copyWith(maxLegs: v ?? 0)),
             ),
           ],
         ),

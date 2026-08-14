@@ -10,7 +10,14 @@ library;
 import '../control/motion_settings.dart';
 import '../ek_protocol.dart';
 
-enum EkLinkState { disconnected, connecting, discovering, ready, failed }
+enum EkLinkState {
+  disconnected,
+  connecting,
+  discovering,
+  ready,
+  reconnecting,
+  failed,
+}
 
 /// Everything the UI needs to know about a device at one instant.
 class EkSnapshot {

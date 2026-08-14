@@ -20,7 +20,12 @@ import 'ek_snapshot.dart';
 export 'ek_snapshot.dart' show EkLinkState, EkSnapshot, EkMotionTarget;
 
 class EkConnection implements EkMotionTarget {
-  EkConnection({required this.device, required this.profile, this.name = ''})
+  EkConnection({
+    required this.device,
+    required this.profile,
+    this.name = '',
+    this.autoReconnect = true,
+  })
       : _snapshot = EkSnapshot(
           link: EkLinkState.disconnected,
           kind: profile.kind,
@@ -63,6 +68,31 @@ class EkConnection implements EkMotionTarget {
   Timer? _keepalive;
   bool _keepaliveInFlight = false;
 
+  /// True once device.connect() has actually returned.
+  ///
+  /// `connectionState` pushes an initial value to every new listener, and for a
+  /// device we have not connected to yet that value is `disconnected`. Without
+  /// this guard that initial event is indistinguishable from a real drop, and
+  /// it lands in the middle of connecting — reporting "link dropped" on a link
+  /// that is coming up perfectly well.
+  bool _linkEstablished = false;
+
+  /// Set by an explicit [disconnect] so a deliberate teardown is not mistaken
+  /// for a dropout and reconnected behind the user's back.
+  bool _userDisconnected = false;
+
+  /// Reconnect after an unexpected drop.
+  ///
+  /// This never resumes motion — it restores the link and the keepalive, and
+  /// nothing else. That is a safety improvement rather than a risk: if the link
+  /// drops while the device is completing a recall, the device keeps going and
+  /// holds torque (§7), and until the link is back there is no way to send it a
+  /// stop at all.
+  final bool autoReconnect;
+  static const reconnectAttempts = 5;
+  Timer? _reconnectTimer;
+  int _reconnectsTried = 0;
+
   /// Serialises every GATT write. Concurrent writes stall the queue, so each
   /// operation chains onto the previous one. Errors are swallowed from the
   /// chain (but still returned to that operation's caller) so one failed write
@@ -75,6 +105,9 @@ class EkConnection implements EkMotionTarget {
 
   Future<void> connect() async {
     if (_disposed) throw StateError('connection disposed');
+    _userDisconnected = false;
+    _linkEstablished = false;
+    _reconnectTimer?.cancel();
     _emit(_snapshot.copyWith(link: EkLinkState.connecting, clearError: true));
 
     try {
@@ -84,6 +117,21 @@ class EkConnection implements EkMotionTarget {
       // License.nonprofit per the flutter_blue_plus licence terms: personal and
       // nonprofit use. Commercial distribution would need License.commercial.
       await device.connect(license: License.nonprofit);
+
+      // The user may have hit Disconnect while this was in flight — an
+      // auto-reconnect attempt races an explicit teardown. Honour the user.
+      if (_userDisconnected || _disposed) {
+        await _teardown();
+        try {
+          await device.disconnect();
+        } catch (_) {
+          // Already gone.
+        }
+        _emit(_snapshot.copyWith(link: EkLinkState.disconnected));
+        return;
+      }
+
+      _linkEstablished = true;
 
       _emit(_snapshot.copyWith(link: EkLinkState.discovering));
       final services = await device.discoverServices();
@@ -126,6 +174,7 @@ class EkConnection implements EkMotionTarget {
         clearPosition: true,
       ));
 
+      _reconnectsTried = 0;
       _startKeepalive();
     } catch (e) {
       _emit(_snapshot.copyWith(link: EkLinkState.failed, error: '$e'));
@@ -139,6 +188,9 @@ class EkConnection implements EkMotionTarget {
   /// The stop always goes first. A device left mid-move keeps executing and
   /// holds torque, which locks the carriage so it cannot be moved by hand (§7).
   Future<void> disconnect() async {
+    _userDisconnected = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     if (_write != null && device.isConnected) {
       try {
         await stopMotion();
@@ -159,6 +211,8 @@ class EkConnection implements EkMotionTarget {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     await disconnect();
     await _snapshots.close();
   }
@@ -167,6 +221,7 @@ class EkConnection implements EkMotionTarget {
     _keepalive?.cancel();
     _keepalive = null;
     _keepaliveInFlight = false;
+    _linkEstablished = false;
     await _notifySub?.cancel();
     _notifySub = null;
     await _linkSub?.cancel();
@@ -176,15 +231,56 @@ class EkConnection implements EkMotionTarget {
   }
 
   void _onLinkStateChanged(BluetoothConnectionState s) {
-    if (s == BluetoothConnectionState.disconnected &&
-        _snapshot.link != EkLinkState.disconnected) {
-      _keepalive?.cancel();
-      _keepalive = null;
-      _emit(_snapshot.copyWith(
-        link: EkLinkState.disconnected,
-        error: 'link dropped',
-      ));
+    if (s != BluetoothConnectionState.disconnected) return;
+
+    // Ignore the initial value pushed to every new listener, and anything that
+    // arrives before the connection was ever up. Only a drop from an
+    // established link is a drop.
+    if (!_linkEstablished) return;
+
+    _linkEstablished = false;
+    _keepalive?.cancel();
+    _keepalive = null;
+
+    if (_userDisconnected || _disposed) {
+      _emit(_snapshot.copyWith(link: EkLinkState.disconnected));
+      return;
     }
+
+    if (autoReconnect && _reconnectsTried < reconnectAttempts) {
+      _scheduleReconnect();
+      return;
+    }
+
+    _emit(_snapshot.copyWith(
+      link: EkLinkState.disconnected,
+      error: 'link dropped',
+    ));
+  }
+
+  /// Backs off 1s, 2s, 4s, 8s, 16s across the attempt budget.
+  void _scheduleReconnect() {
+    _reconnectTimer?.cancel();
+    final delay = Duration(seconds: 1 << _reconnectsTried);
+    _reconnectsTried++;
+    _emit(_snapshot.copyWith(
+      link: EkLinkState.reconnecting,
+      error: 'link dropped — reconnecting '
+          '($_reconnectsTried/$reconnectAttempts)',
+    ));
+    _reconnectTimer = Timer(delay, () async {
+      if (_disposed || _userDisconnected) return;
+      try {
+        await connect();
+      } catch (_) {
+        // connect() has already emitted the failure. If attempts remain, the
+        // link-state handler will schedule the next one; otherwise this rests
+        // in `failed` and the user reconnects by hand.
+        if (!_disposed && !_userDisconnected && _reconnectsTried < reconnectAttempts) {
+          _scheduleReconnect();
+        }
+      }
+    });
   }
 
   // -- keepalive ------------------------------------------------------------

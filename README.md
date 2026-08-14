@@ -27,6 +27,14 @@ A motor is attached to a camera. These are not theoretical.
   command the device finishes on its own, so a dropped link ends stopped.
   Streamed velocity keeps running if the host vanishes — which is why jogging is
   hold-to-move only.
+- **Escape stops everything, from any screen.** So does STOP ALL on the device
+  list, and both go through `StopRegistry`, which tears down the ping-pong loop
+  as well as writing the stop. Halting the motor while the loop still runs only
+  pauses it — the next leg would start it again.
+- Auto-reconnect restores the link and the keepalive after an unexpected drop.
+  It never resumes motion. That is a safety improvement rather than a risk: a
+  device that loses its link mid-recall keeps going, and until the link is back
+  there is no way to send it a stop at all.
 
 ## Layout
 
@@ -38,6 +46,8 @@ A motor is attached to a camera. These are not theoretical.
 | `lib/ble/ek_scanner.dart` | Scanning, matched on advertised name. |
 | `lib/ble/ek_connection.dart` | One connection: discovery, 250 ms keepalive, serialised writes, telemetry. |
 | `lib/control/motion_settings.dart` | Speed/acceleration percentages → wire values. |
+| `lib/control/panel_settings.dart` | Panel settings, clamped. Pure. |
+| `lib/control/stop_registry.dart` | Every way to stop everything. Pure. |
 | `lib/control/jog.dart` | Streamed velocity while held. |
 | `lib/control/ping_pong.dart` | Host-supervised loop between two poses. |
 | `lib/ui/device_panel.dart` | Per-device controls. |
@@ -54,7 +64,7 @@ flutter pub get
 dart test
 ```
 
-73 tests, no hardware and no Flutter binding required. They cover the protocol
+88 tests, no hardware and no Flutter binding required. They cover the protocol
 against the captured bytes, plus the motion logic — including that a stop goes
 out on every exit path: normal completion, user stop, lost link, timed-out leg,
 and a write that throws.

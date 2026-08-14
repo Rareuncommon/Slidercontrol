@@ -12,8 +12,10 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'ble/ek_connection.dart';
 import 'ble/ek_permissions.dart';
 import 'ble/ek_scanner.dart';
+import 'control/stop_registry.dart';
 import 'ek_protocol.dart';
 import 'ui/device_panel.dart';
+import 'ui/emergency_stop.dart';
 
 void main() {
   runApp(const SlidercontrolApp());
@@ -32,6 +34,10 @@ class SlidercontrolApp extends StatelessWidget {
         useMaterial3: true,
       ),
       home: const DeviceListPage(),
+      builder: (context, child) => EmergencyStopKeys(
+        registry: StopRegistry.instance,
+        child: child ?? const SizedBox.shrink(),
+      ),
     );
   }
 }
@@ -49,7 +55,28 @@ class _DeviceListPageState extends State<DeviceListPage>
   final _connections = <String, EkConnection>{};
   final _snapSubs = <String, StreamSubscription<EkSnapshot>>{};
 
+  /// Remembered so a connected device stays in the list.
+  ///
+  /// A connected BLE peripheral stops advertising, so it does not appear in any
+  /// subsequent scan. Without this, rescanning made a connected — possibly
+  /// moving — device disappear from the UI along with its disconnect button
+  /// and its control panel.
+  final _connectedInfo = <String, EkDiscovered>{};
+
   List<EkDiscovered> _found = const [];
+
+  /// Everything to show: whatever the last scan saw, plus anything connected.
+  List<EkDiscovered> get _visible {
+    final byId = <String, EkDiscovered>{
+      for (final d in _found) d.id: d,
+    };
+    for (final entry in _connectedInfo.entries) {
+      byId.putIfAbsent(entry.key, () => entry.value);
+    }
+    final out = byId.values.toList()
+      ..sort((a, b) => a.advertisedName.compareTo(b.advertisedName));
+    return out;
+  }
   String? _message;
   bool _busy = false;
 
@@ -70,6 +97,7 @@ class _DeviceListPageState extends State<DeviceListPage>
     }
     // Each connection sends its stop before dropping the link.
     for (final c in _connections.values) {
+      StopRegistry.instance.unregister(c);
       c.dispose();
     }
     _scanner.dispose();
@@ -85,11 +113,7 @@ class _DeviceListPageState extends State<DeviceListPage>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached ||
         state == AppLifecycleState.hidden) {
-      for (final c in _connections.values) {
-        if (c.snapshot.isReady) {
-          c.stopMotion().catchError((Object _) {});
-        }
-      }
+      StopRegistry.instance.stopAll().catchError((Object _) => <String>[]);
     }
   }
 
@@ -122,10 +146,14 @@ class _DeviceListPageState extends State<DeviceListPage>
       profile: d.profile,
       name: d.advertisedName,
     );
-    setState(() => _connections[d.id] = conn);
+    setState(() {
+      _connections[d.id] = conn;
+      _connectedInfo[d.id] = d;
+    });
     _snapSubs[d.id] = conn.snapshots.listen((_) {
       if (mounted) setState(() {});
     });
+    StopRegistry.instance.register(conn, conn.stopMotion);
 
     try {
       await _scanner.stop();
@@ -138,7 +166,8 @@ class _DeviceListPageState extends State<DeviceListPage>
   Future<void> _disconnect(String id) async {
     await _snapSubs.remove(id)?.cancel();
     final c = _connections.remove(id);
-    setState(() {});
+    if (c != null) StopRegistry.instance.unregister(c);
+    setState(() => _connectedInfo.remove(id));
     await c?.dispose();
   }
 
@@ -147,21 +176,14 @@ class _DeviceListPageState extends State<DeviceListPage>
   /// The button you want when something is moving and you do not want to be
   /// navigating to find the right screen first.
   Future<void> _stopAll() async {
-    final live = _connections.values.where((c) => c.snapshot.isReady).toList();
-    if (live.isEmpty) return;
-    final failures = <String>[];
-    for (final c in live) {
-      try {
-        await c.stopMotion();
-      } catch (e) {
-        failures.add('${c.name}: $e');
-      }
-    }
+    final n = StopRegistry.instance.count;
+    if (n == 0) return;
+    final failures = await StopRegistry.instance.stopAll();
     if (!mounted) return;
     setState(() => _message = failures.isEmpty ? null : failures.join('\n'));
     if (failures.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Stopped ${live.length} device(s)')),
+        const SnackBar(content: Text('Stopped')),
       );
     }
   }
@@ -187,7 +209,11 @@ class _DeviceListPageState extends State<DeviceListPage>
       ),
       body: Column(
         children: [
-          if (_connections.values.any((c) => c.snapshot.isReady))
+          // Shown whenever anything is connected at all, including while a
+          // link is down and reconnecting. Hiding the stop control exactly when
+          // the link is unreliable is the wrong instinct: pressing it then
+          // reports why it could not be sent, which beats offering nothing.
+          if (_connections.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
               child: SizedBox(
@@ -200,7 +226,7 @@ class _DeviceListPageState extends State<DeviceListPage>
                   ),
                   onPressed: _stopAll,
                   icon: const Icon(Icons.stop_circle),
-                  label: const Text('STOP ALL',
+                  label: const Text('STOP ALL  ·  Esc',
                       style: TextStyle(fontSize: 18)),
                 ),
               ),
@@ -219,7 +245,7 @@ class _DeviceListPageState extends State<DeviceListPage>
             ),
           if (_busy) const LinearProgressIndicator(),
           Expanded(
-            child: _found.isEmpty
+            child: _visible.isEmpty
                 ? const Center(
                     child: Padding(
                       padding: EdgeInsets.all(24),
@@ -231,9 +257,9 @@ class _DeviceListPageState extends State<DeviceListPage>
                     ),
                   )
                 : ListView.builder(
-                    itemCount: _found.length,
+                    itemCount: _visible.length,
                     itemBuilder: (_, i) {
-                      final d = _found[i];
+                      final d = _visible[i];
                       final c = _connections[d.id];
                       return _DeviceTile(
                         discovered: d,
