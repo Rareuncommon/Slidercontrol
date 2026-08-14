@@ -22,6 +22,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<!-- macOS 11+ shows this in the Bluetooth consent prompt. The sandbox
+	     entitlement alone is not enough on modern macOS. -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Slidercontrol connects to your edelkrone SliderPLUS and HeadONE over Bluetooth to control camera motion.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSMainNibFile</key>

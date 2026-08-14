@@ -53,6 +53,13 @@
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
+	<!-- Shown in the system Bluetooth prompt. iOS refuses to start CoreBluetooth
+	     at all if this key is missing. -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Slidercontrol connects to your edelkrone SliderPLUS and HeadONE over Bluetooth to control camera motion.</string>
+	<!-- Retained for iOS 12 and earlier, where the Always key did not exist. -->
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Slidercontrol connects to your edelkrone SliderPLUS and HeadONE over Bluetooth to control camera motion.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

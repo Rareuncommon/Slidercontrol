@@ -1,4 +1,27 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Bluetooth LE. Android 12 (API 31) split the old monolithic BLUETOOTH
+         permission into SCAN and CONNECT.
+
+         `neverForLocation` asserts the scan is not being used to derive the
+         user's location, which is true here and spares the user a location
+         prompt on API 31+. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- API 30 and below: the legacy permissions, plus location, which older
+         Android requires before it will return any BLE scan result at all. -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
+
+    <uses-feature android:name="android.hardware.bluetooth_le"
+        android:required="true" />
+
     <application
         android:label="slidercontrol"
         android:name="${applicationName}"

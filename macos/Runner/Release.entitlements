@@ -4,5 +4,11 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<!-- Required for CoreBluetooth under the app sandbox. Without it the scan
+	     returns no results and reports no error. This must be present in BOTH
+	     DebugProfile.entitlements and Release.entitlements — a build that has it
+	     in only one of them fails silently in the other configuration. -->
+	<key>com.apple.security.device.bluetooth</key>
+	<true/>
 </dict>
 </plist>
