@@ -61,6 +61,19 @@ class EkConnection implements EkMotionTarget {
 
   void clearFrameLog() => _frameLog.clear();
 
+  void _record(List<int> frame,
+      {required bool outgoing, required bool checksumOk}) {
+    _frameLog.add(EkFrameRecord(
+      at: DateTime.now(),
+      bytes: List.unmodifiable(frame),
+      checksumOk: checksumOk,
+      outgoing: outgoing,
+    ));
+    if (_frameLog.length > frameLogLimit) {
+      _frameLog.removeRange(0, _frameLog.length - frameLogLimit);
+    }
+  }
+
   BluetoothCharacteristic? _write;
   BluetoothCharacteristic? _notify;
   StreamSubscription<List<int>>? _notifySub;
@@ -312,6 +325,9 @@ class EkConnection implements EkMotionTarget {
         throw StateError('${_label()} is not connected');
       }
       await ch.write(frame, withoutResponse: false);
+      // Logged after the write returns, so the log shows what actually reached
+      // the device rather than what was queued.
+      _record(frame, outgoing: true, checksumOk: true);
     });
     _writeChain = result.catchError((Object _) {});
     return result;
@@ -343,14 +359,7 @@ class EkConnection implements EkMotionTarget {
     if (frame.isEmpty) return;
 
     final checksumOk = verifyChecksum(frame);
-    _frameLog.add(EkFrameRecord(
-      at: DateTime.now(),
-      bytes: List.unmodifiable(frame),
-      checksumOk: checksumOk,
-    ));
-    if (_frameLog.length > frameLogLimit) {
-      _frameLog.removeRange(0, _frameLog.length - frameLogLimit);
-    }
+    _record(frame, outgoing: false, checksumOk: checksumOk);
 
     var failures = _snapshot.checksumFailures;
     if (!checksumOk) {

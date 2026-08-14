@@ -29,6 +29,12 @@ class _FrameInspectorState extends State<FrameInspector> {
   /// Frame shapes the spec already accounts for: the 27-byte slider telemetry
   /// and the 122-byte head telemetry (§5). Anything else is more interesting.
   bool _isRoutine(EkFrameRecord f) {
+    if (f.outgoing) {
+      // The 250 ms keepalive is the bulk of the traffic and never interesting.
+      // Everything else the app writes — velocity, save, recall, stop — is.
+      return f.bytes.length == 4 &&
+          (f.bytes[1] == 0x0F || f.bytes[1] == 0x01);
+    }
     if (widget.connection.kind == EkKind.slider) {
       return f.bytes.length == 27 && f.messageType == 0x02;
     }
@@ -44,7 +50,8 @@ class _FrameInspectorState extends State<FrameInspector> {
     // useful thing when a device sends something unexpected.
     final byShape = <String, int>{};
     for (final f in all) {
-      final key = 'type 0x${f.messageType.toRadixString(16).padLeft(2, '0')} · '
+      final key = '${f.outgoing ? 'TX' : 'RX'} '
+          '0x${f.messageType.toRadixString(16).padLeft(2, '0')} · '
           '${f.bytes.length} bytes';
       byShape[key] = (byShape[key] ?? 0) + 1;
     }
@@ -108,13 +115,13 @@ class _FrameInspectorState extends State<FrameInspector> {
                   contentPadding: EdgeInsets.zero,
                   value: _onlyUnrecognised,
                   onChanged: (v) => setState(() => _onlyUnrecognised = v),
-                  title: const Text('Only frames the spec does not describe'),
+                  title: const Text('Only the interesting frames'),
                   subtitle: Text(
-                    widget.connection.kind == EkKind.slider
-                        ? 'Hides the routine 27-byte type-0x02 telemetry.'
-                        : 'Hides the routine 122-byte type-0x02 telemetry. '
-                            'A 16-byte frame with byte 1 = 0x05 is the one §5 '
-                            'suspects carries head progress.',
+                    'Hides the routine telemetry and the 250 ms keepalive, '
+                    'leaving the commands the app writes — velocity, save, '
+                    'recall, stop — and anything received that the spec does '
+                    'not describe.'
+                    '${widget.connection.kind == EkKind.head ? ' A 16-byte frame with byte 1 = 0x05 is the one §5 suspects carries head progress.' : ''}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
@@ -165,9 +172,29 @@ class _FrameTile extends StatelessWidget {
           const SnackBar(content: Text('Frame copied')),
         );
       },
-      title: Text(
-        frame.hex,
-        style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+      title: Row(
+        children: [
+          Container(
+            width: 26,
+            padding: const EdgeInsets.symmetric(vertical: 1),
+            margin: const EdgeInsets.only(right: 8),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: frame.outgoing
+                  ? theme.colorScheme.primaryContainer
+                  : theme.colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(frame.outgoing ? 'TX' : 'RX',
+                style: const TextStyle(fontSize: 9)),
+          ),
+          Expanded(
+            child: Text(
+              frame.hex,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+            ),
+          ),
+        ],
       ),
       subtitle: Row(
         children: [

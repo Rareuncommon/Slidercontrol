@@ -75,6 +75,20 @@ const moveTimeout = Duration(seconds: 60);
 /// suppressed until then.
 const _spinUp = Duration(milliseconds: 800);
 
+/// How stale the last telemetry frame may be before progress is unjudgeable.
+///
+/// Telemetry arrives at about 3.3 Hz while the stall detector samples every
+/// 100 ms, so the position it reads is normally a little stale — that is fine,
+/// it only adds quantisation noise to a net-progress measurement. What is NOT
+/// fine is telemetry stopping: a frozen position reads as zero net progress,
+/// which is indistinguishable from being pressed against a stop. Homing would
+/// then declare a stall within a second of starting, "confirm" it, and finish
+/// having barely moved.
+///
+/// Nothing arrives without the keepalive (§1), so a gap this long means the
+/// poll has stopped getting through, not that the carriage has stopped.
+const telemetryStaleAfter = Duration(milliseconds: 1500);
+
 // --- results ----------------------------------------------------------------
 
 enum HomingStage {
@@ -241,10 +255,25 @@ class Homing {
         await Future<void>.delayed(tick);
         elapsed += tick;
 
-        final pos = _position;
+        final snapshot = target.snapshot;
+        final pos = snapshot.position;
         if (pos == null) continue;
         startPos ??= pos;
         movedTotal = pos - startPos;
+
+        // Progress can only be measured from telemetry. If it has stopped
+        // arriving, refuse to judge rather than reading a frozen counter as a
+        // stalled carriage.
+        final lastFrame = snapshot.lastFrameAt;
+        final stale = lastFrame == null ||
+            DateTime.now().difference(lastFrame) > telemetryStaleAfter;
+        if (stale) {
+          throw HomingAborted(
+            'telemetry stopped arriving, so progress cannot be judged. '
+            'Nothing is reported without the 250 ms keepalive (§1) — check the '
+            'link before homing again.',
+          );
+        }
 
         history.add((at: elapsed, position: pos));
         while (history.isNotEmpty &&
