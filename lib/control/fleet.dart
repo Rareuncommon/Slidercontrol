@@ -32,12 +32,22 @@ class FleetMember {
     required this.name,
     required this.motion,
     this.timings = const LegTimings(),
+    this.motionFor,
   });
 
   final EkMotionTarget target;
   final String name;
   final MotionSettings motion;
   final LegTimings timings;
+
+  /// Resolves the motion for a specific slot, overriding [motion].
+  ///
+  /// Needed because duration matching depends on how far *this* leg travels:
+  /// the slider's distance changes from leg to leg, so its speed has to be
+  /// re-solved each time if both axes are to finish together.
+  final MotionSettings Function(int slot)? motionFor;
+
+  MotionSettings motionForSlot(int slot) => motionFor?.call(slot) ?? motion;
 }
 
 class FleetStatus {
@@ -106,7 +116,7 @@ class FleetPingPong {
     final failures = <String>[];
     await Future.wait(members.map((m) async {
       try {
-        await m.target.recallPose(slot, settings: m.motion);
+        await m.target.recallPose(slot, settings: m.motionForSlot(slot));
       } catch (e) {
         failures.add('${m.name}: $e');
       }
@@ -191,7 +201,8 @@ class FleetPingPong {
         // Issue every recall before awaiting any of them, so the axes start as
         // close together as separate BLE links allow.
         await Future.wait(
-          supervisors.entries.map((e) => e.value.command(slot, e.key.motion)),
+          supervisors.entries
+              .map((e) => e.value.command(slot, e.key.motionForSlot(slot))),
         );
 
         // Wait for all of them. No device starts its next leg until every

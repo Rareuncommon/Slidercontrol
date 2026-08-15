@@ -20,6 +20,7 @@ import '../control/keypose_controller.dart';
 import '../control/leg_supervisor.dart';
 import '../control/motion_settings.dart';
 import '../control/panel_settings.dart';
+import '../control/move_timing.dart';
 import '../control/panel_settings_store.dart';
 import '../control/stop_registry.dart';
 import '../ek_protocol.dart';
@@ -27,6 +28,7 @@ import 'frame_inspector.dart';
 import 'homing_dialog.dart';
 import 'jog_pad.dart';
 import 'keypose_tiles.dart';
+import 'timing_dialog.dart';
 import 'ui_scale.dart';
 
 class ControlPage extends StatefulWidget {
@@ -344,9 +346,17 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
             target: c,
             name: c.name.isEmpty ? c.profile.name : c.name,
             motion: _settingsFor(c.kind).motion,
+            // Re-solved every leg: the slider's distance changes leg to leg, so
+            // a fixed speed would not keep the two axes finishing together.
+            motionFor: (slot) => _keyposes.solvedFor(c.kind, slot),
             timings: LegTimings(
               settle: _settingsFor(c.kind).settle,
-              blindLeg: _settingsFor(c.kind).blindLeg,
+              // With durations matched, the head's blind leg should be the shot
+              // duration plus a margin — it is the only thing holding the leg
+              // open for an axis that reports nothing (§5).
+              blindLeg: _keyposes.timing.matchDurations
+                  ? _keyposes.timing.shot + const Duration(milliseconds: 800)
+                  : _settingsFor(c.kind).blindLeg,
             ),
           ),
       ],
@@ -424,6 +434,18 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
                 : (_slider?.snapshot.state.name ?? 'idle'),
             style: theme.textTheme.bodySmall,
           ),
+          Gap.wMd,
+          if (_keyposes.timing.matchDurations)
+            Text(
+              'matched ${_keyposes.timing.shotSeconds.toStringAsFixed(1)}s'
+              '${_keyposes.timing.sliderCalibrated && _keyposes.timing.headCalibrated ? '' : ' (uncalibrated)'}',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: _keyposes.timing.sliderCalibrated &&
+                        _keyposes.timing.headCalibrated
+                    ? theme.colorScheme.primary
+                    : theme.colorScheme.tertiary,
+              ),
+            ),
           const Spacer(),
           IconButton(
             tooltip: 'Protocol notes',
@@ -620,6 +642,26 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
     );
   }
 
+  Future<void> _openTiming() async {
+    final saved = _keyposes.poses.saved;
+    if (saved.length < 2) {
+      _report('Save at least two keyposes before measuring the timing.');
+      return;
+    }
+    Navigator.of(context).pop();
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => TimingDialog(
+        keyposes: _keyposes,
+        connections: _ready,
+        slotA: saved.first.slot,
+        slotB: saved[1].slot,
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
   Future<void> _openHoming(HomingJob job) async {
     final slider = _slider;
     if (slider == null) return;
@@ -789,10 +831,52 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
                       }
                     },
                   ),
+                  Text('Matched timing',
+                      style: Theme.of(context).textTheme.titleMedium),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _keyposes.timing.matchDurations,
+                    title: const Text('Make both axes take the same time'),
+                    subtitle: const Text(
+                        'Solves each device’s speed so its move lasts the shot '
+                        'duration. An uncalibrated axis keeps its manual speed.'),
+                    onChanged: (v) async {
+                      await _keyposes.saveTiming(
+                          _keyposes.timing.copyWith(matchDurations: v));
+                      setState(() {});
+                      setSheet(() {});
+                    },
+                  ),
+                  LabelledSlider(
+                    label: 'Shot duration',
+                    value: _keyposes.timing.shotSeconds,
+                    min: MoveTiming.minShotSeconds,
+                    max: 30,
+                    display:
+                        '${_keyposes.timing.shotSeconds.toStringAsFixed(1)} s',
+                    onChanged: (v) async {
+                      await _keyposes.saveTiming(
+                          _keyposes.timing.copyWith(shotSeconds: v));
+                      setState(() {});
+                      setSheet(() {});
+                    },
+                  ),
+                  Text(
+                    'Slider: ${_keyposes.timing.sliderCalibrated ? 'calibrated' : 'not calibrated'} · '
+                    'Head: ${_keyposes.timing.headCalibrated ? 'calibrated' : 'not calibrated'}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  Gap.sm,
+                  FilledButton.tonalIcon(
+                    onPressed: _openTiming,
+                    icon: const Icon(Icons.timer_outlined, size: 18),
+                    label: const Text('Measure both axes'),
+                  ),
                   const Caution(
-                    'Matching the two axes so they arrive together means '
-                    'tuning each speed until their leg durations agree — the '
-                    'per-device sliders above are for that.',
+                    'The head reports no position or motion state (§5), so its '
+                    'timing can only come from you watching it and pressing a '
+                    'button when it stops — and that measurement is only valid '
+                    'for the poses it was taken between.',
                   ),
                   Gap.md,
                 ],
