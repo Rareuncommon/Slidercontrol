@@ -60,6 +60,7 @@ A motor is attached to a camera. These are not theoretical.
 | `lib/control/ping_pong.dart` | Host-supervised loop between two poses. |
 | `lib/control/fleet.dart` | Several devices moving together. Pure. |
 | `lib/control/homing.dart` | Homing, stall detection, closed-loop moves. Pure. |
+| `lib/control/move_timing.dart` | Solving each axis's speed for a shared duration. Pure. |
 | `lib/control/pose_store.dart` | Keypose slots and their persistence. Pure. |
 | `lib/control/keypose_controller.dart` | Keyposes across every device. |
 | `lib/ui/control_page.dart` | The single, non-scrolling control page. |
@@ -80,7 +81,7 @@ flutter pub get
 dart test
 ```
 
-129 tests, no hardware and no Flutter binding required. They cover the protocol
+145 tests, no hardware and no Flutter binding required. They cover the protocol
 against the captured bytes, plus the motion logic — including that a stop goes
 out on every exit path: normal completion, user stop, lost link, timed-out leg,
 and a write that throws.
@@ -124,6 +125,13 @@ These come from the spec, not from the implementation:
   speeds if you need them to arrive together.
 - Point Tracking is not implemented (§8); it needs edelkrone's inverse
   kinematics, not just the protocol.
+- **The head's move duration cannot be measured.** It reports no position and
+  no motion state (§5), so making both axes take the same time relies on a
+  human timing one head move. That calibration is only valid for the poses it
+  was taken between, because there is no way to know how far apart two head
+  poses are. Decoding the 16-byte `0x05` frame §5 suspects carries head
+  progress would remove the need entirely — **this is the single capture that
+  would most improve the app.**
 - **Head poses cannot be restored after a power cycle.** The head reports no
   position (§5), so there is nothing to record and nothing to verify arrival
   against. Jogging open-loop for a stored duration would drift with battery and

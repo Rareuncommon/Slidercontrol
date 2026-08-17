@@ -73,7 +73,7 @@ class _HomingDialogState extends State<HomingDialog> {
       onProgress: (p) => _note(p.message),
     );
     try {
-      final datum = await homing.homeBoth();
+      final datum = await homing.homeSingle();
       await widget.keyposes.setDatum(datum);
       _note('Datum established: ${datum.travel} counts of travel.');
 
@@ -149,9 +149,9 @@ class _HomingDialogState extends State<HomingDialog> {
                         Expanded(
                           child: Text(
                             'Take the camera off the rig first.\n\n'
-                            'Homing drives the carriage into both mechanical '
-                            'end stops on purpose — the slider has no soft '
-                            'limits of its own (§7).',
+                            'Homing drives the carriage into a mechanical end '
+                            'stop on purpose — the slider has no soft limits of '
+                            'its own (§7).',
                             style: TextStyle(
                                 color: theme.colorScheme.onErrorContainer),
                           ),
@@ -168,17 +168,22 @@ class _HomingDialogState extends State<HomingDialog> {
                           'at power-off and the save command carries no '
                           'position (§3), so the only way to restore one is to '
                           'physically move there and save.'
-                      : 'This finds both mechanical ends and measures the '
-                          'travel between them, which gives poses a datum they '
-                          'can be expressed against.',
+                      : 'This touches ONE end and derives the far end from the '
+                          'measured rail length of $measuredRailTravelCounts '
+                          'counts, which gives poses a datum they can be '
+                          'expressed against. Half the wear and half the time '
+                          'of a two-end home, and it never drives into the '
+                          'second stop at all — but it is only as accurate as '
+                          'that number, so re-measure if the rail or belt '
+                          'changes.',
                   style: theme.textTheme.bodyMedium,
                 ),
                 Gap.sm,
                 Text(
-                  'Expect roughly 40–60 seconds, nearly all of it homing. Each '
+                  'Expect roughly 20–40 seconds, nearly all of it homing. The '
                   'pass is bounded three ways — stall detection, a travel '
                   'budget, and a timeout — and aborts immediately if the link '
-                  'drops.',
+                  'drops or telemetry stops.',
                   style: theme.textTheme.bodySmall,
                 ),
                 if (_isRestore) ...[

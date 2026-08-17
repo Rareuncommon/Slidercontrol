@@ -57,6 +57,17 @@ const stallConfirmTries = 5;
 /// Slack over the configured rail length before a pass is abandoned.
 const homingBudgetSlack = 1.25;
 
+/// Exact measured travel of this rail, in encoder counts.
+///
+/// §6 quotes ~481,000 from a powered home; this is the figure measured on the
+/// actual rail and is used in preference. It lives here rather than in
+/// ek_protocol.dart because that file is ground truth from the captures, and
+/// this is a property of one particular slider.
+///
+/// Single-end homing derives the far end from this, so it is only as accurate
+/// as this number. Re-measure with a two-end home if the rail or belt changes.
+const measuredRailTravelCounts = 481064;
+
 const homeTimeout = Duration(seconds: 150);
 
 /// Step away from the hard stop once it is found.
@@ -171,7 +182,7 @@ class Homing {
     required this.stillRunning,
     this.onProgress,
     this.tick = jogPeriod,
-    this.railTravelCounts = EkRig.sliderTravelCounts,
+    this.railTravelCounts = measuredRailTravelCounts,
     this.fastVelocity = homeFastVelocity,
     this.slowVelocity = homeSlowVelocity,
     this.spinUp = _spinUp,
