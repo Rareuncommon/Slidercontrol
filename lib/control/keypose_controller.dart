@@ -205,7 +205,9 @@ class KeyposeController {
     if (h == null) return null;
     // The calibration is only valid for the poses it was timed between (§5).
     if (!h.appliesTo(poses.saved.map((p) => p.slot).toList())) return null;
-    return h.solve(timing.shot);
+    // Solved against the time left after the head's start delay, so holding it
+    // back does not also make it finish late.
+    return h.solve(timing.headSolveTarget);
   }
 
   /// Learns the slider's rate from a completed move, so later moves can be
@@ -339,6 +341,7 @@ class KeyposeController {
           // axis spends most of the shot stationary.
           settings: solvedFor(d.kind, slot),
           name: _name(d),
+          startDelay: d.kind == EkKind.head ? timing.headDelay : Duration.zero,
         ));
       }
     }
