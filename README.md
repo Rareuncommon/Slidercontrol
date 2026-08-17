@@ -92,7 +92,7 @@ flutter pub get
 dart test
 ```
 
-186 tests, no hardware and no Flutter binding required. They cover the protocol
+194 tests, no hardware and no Flutter binding required. They cover the protocol
 against the captured bytes, plus the motion logic — including that a stop goes
 out on every exit path: normal completion, user stop, lost link, timed-out leg,
 and a write that throws.
@@ -140,6 +140,15 @@ construction rather than by calculation:
   profile runs in between. It has to be this way: with no position reported,
   the host cannot know which way to turn the head or how far.
 
+  Starting and stopping together is not worth much if the head sprints to its
+  pose in a second and then sits there, so its recall is issued at a *solved*
+  speed. That needs one number from you — **Head leg at full speed**, in
+  Settings: how long the head takes flat out between the poses you are
+  shooting. §7b's period model does the rest, and it is trustworthy in this
+  direction because the head is only ever being slowed down; it is speeding a
+  move up that runs into the motor ceiling. The UI shows the percentage it will
+  command, and says so when even 1% still finishes early.
+
 Consequences worth knowing before you shoot:
 
 - Asking for a shot shorter than the slider can physically manage **extends the
@@ -166,7 +175,12 @@ These come from the spec, not from the implementation:
 - **Speed vs acceleration is unestablished** (§7b). The two `u16` slots are
   symmetric in every captured frame and were always set together, so independent
   sliders rest on an assumption. Setting both to the same value reproduces
-  exactly what was captured; the UI says so when they differ.
+  exactly what was captured; the UI says so when they differ. **On this
+  hardware the acceleration slider has no observable effect on a pose recall**,
+  which is evidence the second `u16` is not acceleration, or is ignored — worth
+  recording in the spec rather than worked around here. In a synchronised move
+  it does have an effect, because there it shapes the velocity ramp the host
+  sends rather than setting a field on the device.
 - **Only 1% and 100% were measured.** Everything between is modelled.
 - **Coordinated slider + head moves are not implemented** (§8). The official
   app pairs the units and captures both axes into a single keypose; that path

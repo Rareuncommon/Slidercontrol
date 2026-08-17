@@ -222,6 +222,17 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
     return null;
   }
 
+  /// The head reference as the slider shows it, defaulting to something usable
+  /// rather than to zero.
+  double get _headFullSpeedSeconds {
+    final d = _keyposes.timing.headAtFullSpeed;
+    final s = d == null ? 1.0 : d.inMilliseconds / 1000.0;
+    return s.clamp(
+      MoveTiming.minHeadReferenceSeconds,
+      MoveTiming.maxHeadReferenceSeconds,
+    );
+  }
+
   String get _activityLabel {
     final s = _loopStatus;
     if (s != null) return '${s.phase.name} · leg ${s.legs}';
@@ -707,7 +718,12 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
         children: [
           Expanded(
             child: _Bar(
-              label: 'Accel',
+              // In a synced move the slider is velocity-streamed and a velocity
+              // frame has no acceleration slot (§7b), so this shapes the ramp
+              // the host sends instead of setting a field on the device.
+              label: _syncReady && _keyposes.timing.matchDurations
+                  ? 'Accel · ramp'
+                  : 'Accel',
               value: _accel,
               onChanged: _fleetRunning ? null : _setAccel,
             ),
@@ -1006,6 +1022,48 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
                             'its own recall at its own rate.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
+                  if (widget.connections.any((c) => c.kind == EkKind.head)) ...[
+                    Gap.sm,
+                    LabelledSlider(
+                      label: 'Head leg at full speed — time it flat out once',
+                      value: _headFullSpeedSeconds,
+                      min: MoveTiming.minHeadReferenceSeconds,
+                      max: MoveTiming.maxHeadReferenceSeconds,
+                      display:
+                          '${_headFullSpeedSeconds.toStringAsFixed(1)} s',
+                      onChanged: (v) async {
+                        await _keyposes.saveTiming(
+                          _keyposes.timing.withHeadAtFullSpeed(
+                            Duration(milliseconds: (v * 1000).round()),
+                          ),
+                        );
+                        setState(() {});
+                        setSheet(() {});
+                      },
+                    ),
+                    Text(
+                      _keyposes.timing.headSolvedPercent == null
+                          ? 'Without this the head runs at its manual speed and '
+                              'finishes long before the slider. Set it to how '
+                              'long the head takes at 100% between the poses '
+                              'you are shooting.'
+                          : _keyposes.timing.headTooFastForShot
+                              ? 'The head cannot be slowed enough for a '
+                                  '${_keyposes.timing.shotSeconds.toStringAsFixed(1)} s '
+                                  'shot — even 1% finishes early. Shorten the '
+                                  'shot, or move the head poses further apart.'
+                              : 'Head will be commanded at '
+                                  '${_keyposes.timing.headSolvedPercent!.toStringAsFixed(0)}% '
+                                  'for a ${_keyposes.timing.shotSeconds.toStringAsFixed(1)} s '
+                                  'leg. If it still arrives early, raise this '
+                                  'number; if it arrives late, lower it.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: _keyposes.timing.headTooFastForShot
+                                ? Theme.of(context).colorScheme.error
+                                : null,
+                          ),
+                    ),
+                  ],
                   const Caution(
                     'A synced move streams velocity to the slider, which §7 '
                     'warns keeps running if the app stops sending. It is for '

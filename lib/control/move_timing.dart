@@ -217,6 +217,55 @@ class MoveTiming {
   bool get sliderCalibrated => slider != null;
   bool get headCalibrated => head != null;
 
+  /// The head's leg duration normalised to 100% speed.
+  ///
+  /// One number, and the only one the head needs: how long it takes flat out
+  /// between the poses you are shooting. Everything else follows from §7b's
+  /// period model — at half the percentage it takes twice as long. Slowing a
+  /// move down is the safe direction for that model; it is speeding one up that
+  /// runs into the motor's ceiling, and the head is only ever slowed here.
+  Duration? get headAtFullSpeed {
+    final h = head;
+    if (h == null) return null;
+    return Duration(
+      milliseconds:
+          (h.referenceDuration.inMilliseconds * h.referencePercent / 100)
+              .round(),
+    );
+  }
+
+  /// Sets [headAtFullSpeed], keeping it applicable to every pose pair.
+  ///
+  /// Deliberately not tied to specific slots, unlike a stopwatch measurement:
+  /// this is a dial you turn until the head keeps up, not a claim about a
+  /// distance the device never reported.
+  MoveTiming withHeadAtFullSpeed(Duration d) => MoveTiming(
+        slider: slider,
+        head: HeadTiming(referenceDuration: d, referencePercent: 100),
+        shotSeconds: shotSeconds,
+        matchDurations: matchDurations,
+      );
+
+  /// The speed percentage the head will be commanded at for a [shot]-long leg,
+  /// or null if there is no reference yet. Shown in the UI so the dial is not
+  /// operating blind.
+  double? get headSolvedPercent => head?.solve(shot).percent;
+
+  /// True when the head cannot be slowed enough to fill the shot — its solved
+  /// percentage would fall below 1. The move will finish early no matter what.
+  bool get headTooFastForShot {
+    final h = head;
+    if (h == null || shot.inMilliseconds <= 0) return false;
+    // Below 1% there is nowhere left to go, so the head arrives early whatever
+    // is commanded.
+    return h.referenceDuration.inMilliseconds * h.referencePercent /
+            shot.inMilliseconds <
+        1;
+  }
+
+  static const minHeadReferenceSeconds = 0.2;
+  static const maxHeadReferenceSeconds = 20.0;
+
   MoveTiming copyWith({
     SliderTiming? slider,
     HeadTiming? head,

@@ -192,14 +192,68 @@ void main() {
     });
 
     test('peaks in the middle at the documented rate', () {
-      expect(syncProfileRate(0.5), closeTo(syncProfilePeakRate, 1e-9));
+      expect(syncProfileRate(0.5), closeTo(syncProfilePeakRate(), 1e-9));
       for (var i = 0; i <= 100; i++) {
         expect(syncProfileRate(i / 100),
-            lessThanOrEqualTo(syncProfilePeakRate + 1e-9));
+            lessThanOrEqualTo(syncProfilePeakRate() + 1e-9));
       }
     });
 
-    test('the rate integrates to the profile', () {
+    test('holds every property at every ramp the accel slider can produce', () {
+      for (var percent = 1.0; percent <= 100; percent += 1) {
+        final ramp = syncRampForAccel(percent);
+        expect(syncProfile(0, ramp: ramp), closeTo(0, 1e-9),
+            reason: 'accel $percent');
+        expect(syncProfile(1, ramp: ramp), closeTo(1, 1e-9),
+            reason: 'accel $percent');
+        expect(syncProfile(0.5, ramp: ramp), closeTo(0.5, 1e-9),
+            reason: 'accel $percent');
+        expect(syncProfileRate(0, ramp: ramp), closeTo(0, 1e-9),
+            reason: 'accel $percent');
+        expect(syncProfileRate(1, ramp: ramp), closeTo(0, 1e-9),
+            reason: 'accel $percent');
+
+        var previous = -1.0;
+        for (var i = 0; i <= 200; i++) {
+          final v = syncProfile(i / 200, ramp: ramp);
+          expect(v, greaterThanOrEqualTo(previous - 1e-9),
+              reason: 'accel $percent went backwards');
+          previous = v;
+        }
+
+        // The rate really is the derivative, at every ramp.
+        var area = 0.0;
+        const steps = 4000;
+        for (var i = 0; i < steps; i++) {
+          area += syncProfileRate((i + 0.5) / steps, ramp: ramp) / steps;
+        }
+        expect(area, closeTo(1.0, 2e-3), reason: 'accel $percent');
+      }
+    });
+
+    test('more acceleration means a shorter ramp and a lower peak', () {
+      final gentle = syncRampForAccel(1);
+      final sharp = syncRampForAccel(100);
+
+      expect(gentle, syncRampMax);
+      expect(sharp, closeTo(syncRampMin, 1e-9));
+      // Short ramps spend longer at cruise, so the peak needed is lower.
+      expect(syncProfilePeakRate(ramp: sharp),
+          lessThan(syncProfilePeakRate(ramp: gentle)));
+    });
+
+    test('a sharp ramp reaches cruise sooner than a gentle one', () {
+      final sharp = syncRampForAccel(100);
+      final gentle = syncRampForAccel(1);
+      // A tenth of the way in, the sharp profile is already at full speed and
+      // the gentle one is nowhere near it.
+      expect(syncProfileRate(0.1, ramp: sharp),
+          closeTo(syncProfilePeakRate(ramp: sharp), 1e-9));
+      expect(syncProfileRate(0.1, ramp: gentle),
+          lessThan(syncProfilePeakRate(ramp: gentle) * 0.5));
+    });
+
+    test('the rate integrates to the profile at the default ramp', () {
       // Sanity check that rate really is the derivative: crude integration
       // over the move should land on 1.
       var area = 0.0;
@@ -412,17 +466,18 @@ void main() {
 
     test('drives the carriage to its target', () async {
       final rail = FakeRail(start: 100000);
-      // 12,000 counts in 1.2 s peaks at 15,000 counts/sec — inside the ceiling.
+      // At the default ramp the peak is twice the average, so 10,000 counts in
+      // 1.2 s peaks at ~16,700 counts/sec — inside the 18,000 ceiling.
       final move = SyncMove(
-        axes: [SliderSyncAxis(target: rail, targetCounts: 112000)],
+        axes: [SliderSyncAxis(target: rail, targetCounts: 110000)],
         stillRunning: () => true,
         tick: const Duration(milliseconds: 20),
       );
 
       expect(await move.run(const Duration(milliseconds: 1200)),
           SyncOutcome.done);
-      // Within 1% of a 12,000-count move.
-      expect((rail.position - 112000).abs(), lessThan(120));
+      // Within 1% of a 10,000-count move.
+      expect((rail.position - 110000).abs(), lessThan(100));
     });
 
     test('starts and finishes at a standstill', () async {
@@ -445,8 +500,8 @@ void main() {
         targetCounts: 480000,
         maxVelocity: 18000,
       );
-      // 480,000 counts peaking at 1.5x the average needs 40 s at 18,000/sec.
-      expect(axis.minimumDuration.inMilliseconds, closeTo(40000, 50));
+      // 480,000 counts peaking at 2x the average needs 53.3 s at 18,000/sec.
+      expect(axis.minimumDuration.inMilliseconds, closeTo(53334, 50));
     });
 
     test('the fleet minimum is the slowest axis, and the head does not vote',
@@ -462,7 +517,7 @@ void main() {
         ],
         stillRunning: () => true,
       );
-      expect(move.minimumDuration.inMilliseconds, closeTo(10000, 50));
+      expect(move.minimumDuration.inMilliseconds, closeTo(13334, 50));
     });
 
     test('never exceeds its velocity ceiling', () async {
