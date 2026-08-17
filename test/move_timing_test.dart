@@ -10,6 +10,8 @@ import 'package:test/test.dart';
 import '../lib/control/move_timing.dart';
 
 void main() {
+  _headDialTests();
+
   group('slider timing', () {
     test('learns a rate from an observed move', () {
       // 100,000 counts in 10 s at 50% → 200 counts/sec at 1%.
@@ -198,6 +200,53 @@ void main() {
     test('the shot duration is clamped on load', () {
       final t = MoveTiming.decode('{"shotSeconds": 99999}');
       expect(t.shotSeconds, MoveTiming.maxShotSeconds);
+    });
+  });
+}
+
+void _headDialTests() {
+  group('the head dial', () {
+    test('one number at full speed solves every shot duration', () {
+      // The head takes half a second flat out. §7b's period model says half
+      // the percentage is twice the time, so a 5 s leg wants 10%.
+      final t = const MoveTiming(shotSeconds: 5)
+          .withHeadAtFullSpeed(const Duration(milliseconds: 500));
+
+      expect(t.headAtFullSpeed, const Duration(milliseconds: 500));
+      expect(t.headSolvedPercent, closeTo(10, 0.01));
+      expect(t.headTooFastForShot, isFalse);
+    });
+
+    test('applies to any pose pair, unlike a stopwatch measurement', () {
+      final t = const MoveTiming()
+          .withHeadAtFullSpeed(const Duration(milliseconds: 500));
+      expect(t.head!.appliesTo([0, 1]), isTrue);
+      expect(t.head!.appliesTo([3, 7, 9]), isTrue);
+    });
+
+    test('flags a shot the head cannot be slowed enough to fill', () {
+      // Flat out it takes 0.5 s, so even 1% only stretches it to 50 s.
+      final ok = const MoveTiming(shotSeconds: 50)
+          .withHeadAtFullSpeed(const Duration(milliseconds: 500));
+      expect(ok.headTooFastForShot, isFalse);
+
+      final tooLong = const MoveTiming(shotSeconds: 90)
+          .withHeadAtFullSpeed(const Duration(milliseconds: 500));
+      expect(tooLong.headTooFastForShot, isTrue);
+    });
+
+    test('survives a round trip through storage', () {
+      final t = const MoveTiming(shotSeconds: 8)
+          .withHeadAtFullSpeed(const Duration(milliseconds: 1500));
+      final back = MoveTiming.decode(t.encode());
+
+      expect(back.headAtFullSpeed, const Duration(milliseconds: 1500));
+      expect(back.headSolvedPercent, closeTo(t.headSolvedPercent!, 0.01));
+    });
+
+    test('no reference means no solved percentage, rather than a guess', () {
+      expect(const MoveTiming().headSolvedPercent, isNull);
+      expect(const MoveTiming().headTooFastForShot, isFalse);
     });
   });
 }

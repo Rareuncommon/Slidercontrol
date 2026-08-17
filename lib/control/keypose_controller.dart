@@ -312,6 +312,8 @@ class KeyposeController {
     final axes = <SyncAxis>[];
     for (final d in devices) {
       if (!d.snapshot.isReady) continue;
+      final manual = settingsFor(d.kind);
+      final ramp = syncRampForAccel(manual.accelPercent);
       final target = d.kind == EkKind.slider ? sliderTargetFor(slot) : null;
       if (d.kind == EkKind.slider &&
           target != null &&
@@ -323,13 +325,19 @@ class KeyposeController {
           velocitySign: datum?.velocitySign ?? 1,
           // The Speed slider sets the ceiling, exactly as it does for jogging —
           // it is the same streamed-velocity command underneath (§4).
-          maxVelocity: settingsFor(d.kind).jogVelocity(),
+          maxVelocity: manual.jogVelocity(),
+          ramp: ramp,
         ));
       } else {
         axes.add(PoseRecallSyncAxis(
           target: d,
           slot: slot,
-          settings: settingsFor(d.kind),
+          // Solved, not manual. A recall issued at the manual speed finishes
+          // whenever it finishes — for the head that is about a second — and
+          // then sits still for the rest of the leg while the slider is still
+          // moving. Starting and stopping together is not worth much if one
+          // axis spends most of the shot stationary.
+          settings: solvedFor(d.kind, slot),
           name: _name(d),
         ));
       }

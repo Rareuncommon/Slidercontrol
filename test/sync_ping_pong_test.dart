@@ -140,15 +140,16 @@ void main() {
   });
 
   test('extends a leg the slider cannot physically manage that fast', () {
-    // 60,000 counts at 9,000 counts/sec peaks-limited needs 10 s, not the 1 s
-    // asked for. Reporting the real figure is the point: a shot that quietly
-    // ran long, or arrived short, is worse than one that says so.
+    // 60,000 counts at a 9,000 counts/sec ceiling, peaking at twice the
+    // average, needs 13.3 s — not the 1 s asked for. Reporting the real figure
+    // is the point: a shot that quietly ran long, or arrived short, is worse
+    // than one that says so.
     final f = buildLoop(
       shot: const Duration(seconds: 1),
       targets: {0: 60000, 1: 0},
       maxVelocity: 9000,
     );
-    expect(f.loop.effectiveLeg(0).inMilliseconds, closeTo(10000, 50));
+    expect(f.loop.effectiveLeg(0).inMilliseconds, closeTo(13334, 50));
   });
 
   test('keeps the shot duration when the move fits inside it', () {
@@ -157,7 +158,7 @@ void main() {
       targets: {0: 60000, 1: 0},
       maxVelocity: 30000,
     );
-    // 60,000 counts at 30,000/sec needs 3 s; 8 s is comfortably enough.
+    // 60,000 counts at 30,000/sec needs 4 s; 8 s is comfortably enough.
     expect(f.loop.effectiveLeg(0), const Duration(seconds: 8));
   });
 

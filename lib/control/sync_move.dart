@@ -39,23 +39,72 @@ import '../ble/ek_snapshot.dart';
 import '../ek_protocol.dart';
 import 'motion_settings.dart';
 
-/// Position along the move, 0→1, as a fraction of elapsed time.
+/// Shape of the move: ramp up, hold, ramp down.
 ///
-/// Smoothstep: zero velocity at both ends, so nothing jerks into motion or
-/// stops dead.
-double syncProfile(double u) {
-  final t = u.clamp(0.0, 1.0);
+/// [ramp] is the fraction of the move spent accelerating, and the same fraction
+/// again decelerating — so 0.5 is a move that is pure ramp with no cruise, and
+/// 0.05 is one that gets up to speed almost at once and holds it.
+///
+/// **This is what the acceleration setting drives now.** A pose recall carries
+/// an acceleration field in its frame, but a synchronised move does not use
+/// pose recalls for the slider — it streams velocity, and a velocity frame has
+/// no acceleration slot (§7b). So acceleration has to be expressed in the shape
+/// of the velocity the host sends, which is what this does, and it is a more
+/// direct control than the field ever was.
+const syncRampMin = 0.05;
+const syncRampMax = 0.5;
+
+/// Acceleration percentage → ramp fraction. Higher acceleration, shorter ramps.
+double syncRampForAccel(double accelPercent) {
+  final p = accelPercent.clamp(1.0, 100.0);
+  return syncRampMax - (syncRampMax - syncRampMin) * ((p - 1) / 99);
+}
+
+double _clampRamp(double r) => r.clamp(syncRampMin, syncRampMax);
+
+/// Smoothstep, used to round the ends of each ramp so there is no jerk.
+double _smoothstep(double x) {
+  final t = x.clamp(0.0, 1.0);
   return t * t * (3 - 2 * t);
 }
 
-/// Rate of change of [syncProfile]. Peaks at 1.5 in the middle.
-double syncProfileRate(double u) {
+/// Integral of [_smoothstep] from 0 to x. Reaches 0.5 at x = 1.
+double _smoothstepArea(double x) {
+  final t = x.clamp(0.0, 1.0);
+  return t * t * t - t * t * t * t / 2;
+}
+
+/// Unnormalised velocity shape: rounded ramp up, flat, rounded ramp down.
+double _shape(double u, double ramp) {
   final t = u.clamp(0.0, 1.0);
-  return 6 * t * (1 - t);
+  if (t < ramp) return _smoothstep(t / ramp);
+  if (t > 1 - ramp) return _smoothstep((1 - t) / ramp);
+  return 1;
+}
+
+/// Position along the move, 0→1, as a fraction of elapsed time.
+double syncProfile(double u, {double ramp = syncRampMax}) {
+  final r = _clampRamp(ramp);
+  final t = u.clamp(0.0, 1.0);
+  // Area under the whole shape, which the profile is normalised by.
+  final total = 1 - r;
+  if (t < r) return r * _smoothstepArea(t / r) / total;
+  if (t > 1 - r) return 1 - r * _smoothstepArea((1 - t) / r) / total;
+  return (r / 2 + (t - r)) / total;
+}
+
+/// Rate of change of [syncProfile]. Peaks at [syncProfilePeakRate].
+double syncProfileRate(double u, {double ramp = syncRampMax}) {
+  final r = _clampRamp(ramp);
+  return _shape(u, r) / (1 - r);
 }
 
 /// Peak of [syncProfileRate], used to normalise a commanded peak velocity.
-const syncProfilePeakRate = 1.5;
+///
+/// A move held at its cruise speed for longer needs a lower peak to cover the
+/// same ground in the same time, which is why this depends on the ramp.
+double syncProfilePeakRate({double ramp = syncRampMax}) =>
+    1 / (1 - _clampRamp(ramp));
 
 enum SyncOutcome { done, stopped, linkLost, failed }
 
@@ -98,6 +147,7 @@ class SliderSyncAxis implements SyncAxis {
     this.gain = 0.9,
     this.maxVelocity = 18000,
     this.velocitySign = 1,
+    this.ramp = syncRampMax,
   });
 
   @override
@@ -117,6 +167,9 @@ class SliderSyncAxis implements SyncAxis {
   /// +1 if a positive velocity makes the counter increase.
   final int velocitySign;
 
+  /// Fraction of the move spent accelerating. See [syncRampForAccel].
+  final double ramp;
+
   int _start = 0;
   int get startCounts => _start;
 
@@ -131,7 +184,8 @@ class SliderSyncAxis implements SyncAxis {
   @override
   Duration get minimumDuration {
     if (maxVelocity <= 0) return Duration.zero;
-    final seconds = spanCounts.abs() * syncProfilePeakRate / maxVelocity;
+    final seconds =
+        spanCounts.abs() * syncProfilePeakRate(ramp: ramp) / maxVelocity;
     return Duration(milliseconds: (seconds * 1000).ceil());
   }
 
@@ -150,8 +204,8 @@ class SliderSyncAxis implements SyncAxis {
     if (seconds <= 0) return;
 
     // Where the carriage should be right now, and how fast it should be going.
-    final want = _start + span * syncProfile(u);
-    final feedForward = span * syncProfileRate(u) / seconds;
+    final want = _start + span * syncProfile(u, ramp: ramp);
+    final feedForward = span * syncProfileRate(u, ramp: ramp) / seconds;
 
     final here = target.snapshot.position;
     final error = here == null ? 0.0 : (want - here);
@@ -188,6 +242,7 @@ class HeadSyncAxis implements SyncAxis {
     required this.target,
     required this.peakVelocity,
     this.name = 'head',
+    this.ramp = syncRampMax,
   });
 
   @override
@@ -199,6 +254,9 @@ class HeadSyncAxis implements SyncAxis {
   /// Signed. Peak counts/sec at the middle of the move.
   final int peakVelocity;
 
+  /// Fraction of the move spent accelerating. See [syncRampForAccel].
+  final double ramp;
+
   /// None. The head is open loop: a shorter move does not fall short of a
   /// target, it simply covers less angle. Only the slider constrains duration.
   @override
@@ -209,7 +267,8 @@ class HeadSyncAxis implements SyncAxis {
 
   @override
   Future<void> step(double u, Duration duration) async {
-    final shaped = syncProfileRate(u) / syncProfilePeakRate;
+    final shaped =
+        syncProfileRate(u, ramp: ramp) / syncProfilePeakRate(ramp: ramp);
     await target.setVelocity((peakVelocity * shaped).round());
   }
 
