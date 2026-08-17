@@ -23,6 +23,7 @@ import '../control/panel_settings.dart';
 import '../control/move_timing.dart';
 import '../control/panel_settings_store.dart';
 import '../control/stop_registry.dart';
+import '../control/sync_ping_pong.dart';
 import '../ek_protocol.dart';
 import 'frame_inspector.dart';
 import 'homing_dialog.dart';
@@ -47,7 +48,16 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
 
   late final KeyposeController _keyposes;
   FleetPingPong? _fleet;
+
+  /// The clock-driven ping-pong, used when both axes can be started and stopped
+  /// together. Only ever one of this and [_fleet] is live.
+  SyncPingPong? _sync;
   StreamSubscription<FleetStatus>? _fleetSub;
+
+  /// Set while a synchronised recall is streaming velocity, and cleared to
+  /// abort it. A streamed move has to be told to stop; a pose recall does not.
+  bool _syncRecalling = false;
+  bool _cancelSyncRecall = false;
 
   /// Tracks link transitions so poses can be re-marked unverified after a
   /// reconnect — the device may have been power-cycled in between, and nothing
@@ -71,6 +81,9 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
         final wasReady = _wasReady[id] ?? false;
         if (s.isReady && !wasReady) _keyposes.markUnverified();
         _wasReady[id] = s.isReady;
+        // A datum restored from a previous run cannot be checked until a real
+        // position arrives, which is usually after load. Check it here instead.
+        if (_keyposes.revalidateDatum()) _reportStaleDatum();
         if (mounted) setState(() {});
       }));
     }
@@ -91,7 +104,18 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
       setState(() => _settings[c.kind.name] = s);
     }
     await _keyposes.load();
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    if (_keyposes.datumStale) _reportStaleDatum();
+  }
+
+  /// The stored reference survives an app restart, but not a device power
+  /// cycle: the position counter restarts at an arbitrary value (§5), so a
+  /// datum kept across one would point at the wrong part of the rail.
+  void _reportStaleDatum() {
+    _report('The slider’s position counter has been reset since it was last '
+        'homed, so the saved reference no longer matches the rail. Home it '
+        'again before recalling poses.');
   }
 
   @override
@@ -106,6 +130,7 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
       j.stop();
     }
     _fleet?.dispose();
+    _sync?.dispose();
     super.dispose();
   }
 
@@ -125,7 +150,11 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
     for (final j in _jogs.values) {
       await j.stop();
     }
+    // Set before the awaits: a synchronised recall polls this between ticks,
+    // and the sooner it sees the flag the sooner it stops streaming velocity.
+    _cancelSyncRecall = true;
     await _fleet?.stop();
+    await _sync?.stop();
     for (final c in widget.connections) {
       try {
         await c.stopMotion();
@@ -170,7 +199,35 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
     return null;
   }
 
-  bool get _fleetRunning => _fleet?.isRunning ?? false;
+  bool get _fleetRunning =>
+      (_fleet?.isRunning ?? false) || (_sync?.isRunning ?? false);
+
+  /// Whether a leg to [slot] can be driven from one clock, so both axes start
+  /// and stop together. Needs the shot duration to be in play and the slider to
+  /// have both a live position and a target to move to.
+  bool _canSync(int slot) =>
+      _keyposes.timing.matchDurations && _keyposes.canSync(slot);
+
+  /// Whether synchronised moves are available at all right now, for the status
+  /// strip. Poses only carry a slider target once the rail has been homed.
+  bool get _syncReady {
+    final saved = _keyposes.poses.saved;
+    return saved.isNotEmpty && _canSync(saved.first.slot);
+  }
+
+  /// The live status of whichever loop is running, or null if none is.
+  FleetStatus? get _loopStatus {
+    if (_sync?.isRunning ?? false) return _sync!.status;
+    if (_fleet?.isRunning ?? false) return _fleet!.status;
+    return null;
+  }
+
+  String get _activityLabel {
+    final s = _loopStatus;
+    if (s != null) return '${s.phase.name} · leg ${s.legs}';
+    if (_syncRecalling) return 'synced move';
+    return _slider?.snapshot.state.name ?? 'idle';
+  }
 
   // -- speed ---------------------------------------------------------------
 
@@ -203,7 +260,35 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
 
   Future<void> _recall(int slot) async {
     setState(() => _activeSlot = slot);
-    await _guard(() => _keyposes.recall(slot));
+    if (!_canSync(slot)) {
+      // No shared clock available, so each device runs its own recall at its
+      // own rate. Honest, but the axes will not arrive together.
+      await _guard(() => _keyposes.recall(slot));
+      return;
+    }
+
+    _cancelSyncRecall = false;
+    setState(() {
+      _syncRecalling = true;
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final failure = await _keyposes.recallSynced(
+        slot,
+        stillRunning: () => !_cancelSyncRecall,
+      );
+      if (failure != null) _report(failure);
+    } catch (e) {
+      _report('$e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _syncRecalling = false;
+          _busy = false;
+        });
+      }
+    }
   }
 
   Future<void> _saveNew() async {
@@ -329,6 +414,7 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
   Future<void> _togglePingPong() async {
     if (_fleetRunning) {
       await _fleet?.stop();
+      await _sync?.stop();
       if (mounted) setState(() {});
       return;
     }
@@ -336,6 +422,14 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
     final saved = _keyposes.poses.saved;
     if (saved.length < 2) {
       _report('Save at least two keyposes before running a ping-pong.');
+      return;
+    }
+
+    final slotA = saved.first.slot;
+    final slotB = saved[1].slot;
+
+    if (_canSync(slotA) && _canSync(slotB)) {
+      await _startSyncPingPong(slotA, slotB);
       return;
     }
 
@@ -360,8 +454,8 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
             ),
           ),
       ],
-      slotA: saved.first.slot,
-      slotB: saved[1].slot,
+      slotA: slotA,
+      slotB: slotB,
     );
     await _fleetSub?.cancel();
     _fleetSub = next.statuses.listen((s) {
@@ -369,6 +463,51 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
     });
     setState(() {
       _fleet = next;
+      _sync = null;
+      _error = null;
+    });
+    unawaited(next
+        .start(
+          dwell: _settingsFor(EkKind.slider).dwell,
+          maxLegs: _settingsFor(EkKind.slider).maxLegs,
+        )
+        .catchError((Object e) => _report('$e')));
+    if (mounted) setState(() {});
+  }
+
+  /// The clock-driven loop: every leg is one [SyncMove], so the axes start and
+  /// stop together on every pass rather than only at the ends.
+  Future<void> _startSyncPingPong(int slotA, int slotB) async {
+    final next = SyncPingPong(
+      // Rebuilt each leg, from wherever the carriage actually is.
+      axesFor: _keyposes.syncAxesFor,
+      shot: _keyposes.timing.shot,
+      stopAll: () async {
+        final failures = <String>[];
+        for (final c in widget.connections) {
+          try {
+            await c.stopMotion();
+          } catch (e) {
+            failures.add('$e');
+          }
+        }
+        return failures;
+      },
+      slotA: slotA,
+      slotB: slotB,
+    );
+    await _fleetSub?.cancel();
+    _fleetSub = next.statuses.listen((s) {
+      if (mounted) {
+        setState(() {
+          _activeSlot = s.slot;
+          if (s.error != null) _error = s.error;
+        });
+      }
+    });
+    setState(() {
+      _sync = next;
+      _fleet = null;
       _error = null;
     });
     unawaited(next
@@ -428,20 +567,15 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
             ),
             Gap.wMd,
           ],
-          Text(
-            _fleetRunning
-                ? '${_fleet!.status.phase.name} · leg ${_fleet!.status.legs}'
-                : (_slider?.snapshot.state.name ?? 'idle'),
-            style: theme.textTheme.bodySmall,
-          ),
+          Text(_activityLabel, style: theme.textTheme.bodySmall),
           Gap.wMd,
           if (_keyposes.timing.matchDurations)
             Text(
-              'matched ${_keyposes.timing.shotSeconds.toStringAsFixed(1)}s'
-              '${_keyposes.timing.sliderCalibrated && _keyposes.timing.headCalibrated ? '' : ' (uncalibrated)'}',
+              _syncReady
+                  ? 'synced ${_keyposes.timing.shotSeconds.toStringAsFixed(1)}s'
+                  : 'unsynced — home the slider',
               style: theme.textTheme.bodySmall?.copyWith(
-                color: _keyposes.timing.sliderCalibrated &&
-                        _keyposes.timing.headCalibrated
+                color: _syncReady
                     ? theme.colorScheme.primary
                     : theme.colorScheme.tertiary,
               ),
@@ -838,8 +972,10 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
                     value: _keyposes.timing.matchDurations,
                     title: const Text('Make both axes take the same time'),
                     subtitle: const Text(
-                        'Solves each device’s speed so its move lasts the shot '
-                        'duration. An uncalibrated axis keeps its manual speed.'),
+                        'Drives both axes from one clock, so they start and '
+                        'stop together. Needs no calibration — the slider is '
+                        'steered to its target over the shot duration and the '
+                        'head is started and stopped on the same ticks.'),
                     onChanged: (v) async {
                       await _keyposes.saveTiming(
                           _keyposes.timing.copyWith(matchDurations: v));
@@ -862,21 +998,33 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
                     },
                   ),
                   Text(
-                    'Slider: ${_keyposes.timing.sliderCalibrated ? 'calibrated' : 'not calibrated'} · '
-                    'Head: ${_keyposes.timing.headCalibrated ? 'calibrated' : 'not calibrated'}',
+                    _syncReady
+                        ? 'Synced: the slider is steered to a target position, '
+                            'so the shot duration is exact.'
+                        : 'Not synced yet — home the slider so poses carry a '
+                            'position to steer to. Until then each device runs '
+                            'its own recall at its own rate.',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
+                  const Caution(
+                    'A synced move streams velocity to the slider, which §7 '
+                    'warns keeps running if the app stops sending. It is for '
+                    'attended shooting. The head still runs its own recall, '
+                    'started and stopped on the same ticks — so if the shot is '
+                    'shorter than the head really needs, the head arrives '
+                    'short rather than the two falling out of step.',
+                  ),
                   Gap.sm,
-                  FilledButton.tonalIcon(
+                  TextButton.icon(
                     onPressed: _openTiming,
                     icon: const Icon(Icons.timer_outlined, size: 18),
-                    label: const Text('Measure both axes'),
+                    label: const Text('Measure both axes (unsynced fallback)'),
                   ),
-                  const Caution(
-                    'The head reports no position or motion state (§5), so its '
-                    'timing can only come from you watching it and pressing a '
-                    'button when it stops — and that measurement is only valid '
-                    'for the poses it was taken between.',
+                  Text(
+                    'Only used when the slider has no target to steer to. '
+                    'Slider: ${_keyposes.timing.sliderCalibrated ? 'calibrated' : 'not calibrated'} · '
+                    'Head: ${_keyposes.timing.headCalibrated ? 'calibrated' : 'not calibrated'}.',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                   Gap.md,
                 ],

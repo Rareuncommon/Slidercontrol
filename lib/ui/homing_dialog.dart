@@ -73,9 +73,18 @@ class _HomingDialogState extends State<HomingDialog> {
       onProgress: (p) => _note(p.message),
     );
     try {
-      final datum = await homing.homeSingle();
-      await widget.keyposes.setDatum(datum);
-      _note('Datum established: ${datum.travel} counts of travel.');
+      // Only home if there is no datum. Homing is slow and drives into a stop,
+      // so repeating it for a restore that already has a reference is wear for
+      // nothing. Re-home explicitly when the reference is actually gone.
+      var datum = widget.keyposes.datum;
+      if (datum == null || widget.job == HomingJob.home) {
+        datum = await homing.homeSingle();
+        await widget.keyposes.setDatum(datum);
+        _note('Datum established: ${datum.travel} counts of travel.');
+      } else {
+        _note('Already homed — reusing the existing reference '
+            '(${datum.travel} counts). Use Home slider to re-establish it.');
+      }
 
       if (_isRestore) {
         final restorable = widget.keyposes.restorable;
@@ -163,11 +172,16 @@ class _HomingDialogState extends State<HomingDialog> {
                 Gap.md,
                 Text(
                   _isRestore
-                      ? 'This homes the rail, then drives to each pose stored '
-                          'as a fraction of travel and re-saves it. Poses die '
-                          'at power-off and the save command carries no '
-                          'position (§3), so the only way to restore one is to '
-                          'physically move there and save.'
+                      ? (widget.keyposes.isHomed
+                          ? 'The rail is already homed, so this goes straight '
+                              'to restoring: it drives to each pose stored as a '
+                              'fraction of travel and re-saves it. Poses die at '
+                              'power-off and the save command carries no '
+                              'position (§3), so the only way to restore one is '
+                              'to physically move there and save.'
+                          : 'The rail is not homed yet, so this homes it first, '
+                              'then drives to each pose stored as a fraction of '
+                              'travel and re-saves it.')
                       : 'This touches ONE end and derives the far end from the '
                           'measured rail length of $measuredRailTravelCounts '
                           'counts, which gives poses a datum they can be '
@@ -179,7 +193,8 @@ class _HomingDialogState extends State<HomingDialog> {
                   style: theme.textTheme.bodyMedium,
                 ),
                 Gap.sm,
-                Text(
+                if (!(_isRestore && widget.keyposes.isHomed))
+                  Text(
                   'Expect roughly 20–40 seconds, nearly all of it homing. The '
                   'pass is bounded three ways — stall detection, a travel '
                   'budget, and a timeout — and aborts immediately if the link '
