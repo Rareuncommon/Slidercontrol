@@ -34,6 +34,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import '../ble/ek_snapshot.dart';
 import '../ek_protocol.dart';
@@ -55,9 +56,16 @@ const syncRampMin = 0.05;
 const syncRampMax = 0.5;
 
 /// Acceleration percentage → ramp fraction. Higher acceleration, shorter ramps.
+///
+/// Geometric rather than linear, because a linear map puts the middle of the
+/// dial at a ramp of 0.28 — well over a second of near-imperceptible creep on a
+/// five-second leg, during which the head is already visibly moving. Geometric
+/// puts mid-dial near 0.16 and keeps the long cinematic ease available at the
+/// bottom of the range, where someone asking for it will look.
 double syncRampForAccel(double accelPercent) {
   final p = accelPercent.clamp(1.0, 100.0);
-  return syncRampMax - (syncRampMax - syncRampMin) * ((p - 1) / 99);
+  return syncRampMax *
+      math.pow(syncRampMin / syncRampMax, (p - 1) / 99).toDouble();
 }
 
 double _clampRamp(double r) => r.clamp(syncRampMin, syncRampMax);
@@ -311,6 +319,7 @@ class PoseRecallSyncAxis implements SyncAxis {
     required this.slot,
     required this.settings,
     this.name = 'device',
+    this.startDelay = Duration.zero,
   });
 
   @override
@@ -321,6 +330,19 @@ class PoseRecallSyncAxis implements SyncAxis {
 
   final int slot;
   final MotionSettings settings;
+
+  /// How long after the move begins to issue the recall.
+  ///
+  /// The two axes are commanded on the same tick, but they do not *start* on
+  /// the same tick: the slider's velocity profile begins at zero and takes its
+  /// ramp to become visible, while a recall runs the device's own acceleration,
+  /// which is far shorter. Commanded together, the head is seen to move first.
+  ///
+  /// Nothing here can compute the difference — it is a property of the device's
+  /// internal profile, which was never captured — so this is a dial. Whatever
+  /// is spent waiting is taken off the recall's solved duration, so the head
+  /// still finishes with the slider.
+  final Duration startDelay;
 
   bool _issued = false;
 
@@ -337,6 +359,10 @@ class PoseRecallSyncAxis implements SyncAxis {
   @override
   Future<void> step(double u, Duration duration) async {
     if (_issued) return;
+    if (startDelay > Duration.zero && duration > Duration.zero) {
+      final until = startDelay.inMilliseconds / duration.inMilliseconds;
+      if (u < until) return;
+    }
     _issued = true;
     await target.recallPose(slot, settings: settings);
   }
@@ -417,9 +443,21 @@ class SyncMove {
             : (elapsed.inMilliseconds / duration.inMilliseconds)
                 .clamp(0.0, 1.0);
 
+        // Command the profile at the MIDDLE of the tick this value will be held
+        // over, not at its leading edge. A velocity held from a leading-edge
+        // sample lags the intended profile by half a tick throughout, and — the
+        // part that shows — makes the very first command a literal zero, so the
+        // slider is told to stand still for the first tick while the head is
+        // already moving.
+        final uCommand = duration.inMilliseconds <= 0
+            ? 1.0
+            : ((elapsed.inMilliseconds + tick.inMilliseconds / 2) /
+                    duration.inMilliseconds)
+                .clamp(0.0, 1.0);
+
         // Every axis is commanded before any of them is awaited, so the frames
         // leave together rather than one lagging the other by a write.
-        await Future.wait([for (final a in axes) a.step(u, duration)]);
+        await Future.wait([for (final a in axes) a.step(uCommand, duration)]);
         onProgress?.call(SyncProgress(
           fraction: u,
           message: 'moving ${(u * 100).round()}%',

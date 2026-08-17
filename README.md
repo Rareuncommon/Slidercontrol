@@ -92,7 +92,7 @@ flutter pub get
 dart test
 ```
 
-194 tests, no hardware and no Flutter binding required. They cover the protocol
+199 tests, no hardware and no Flutter binding required. They cover the protocol
 against the captured bytes, plus the motion logic — including that a stop goes
 out on every exit path: normal completion, user stop, lost link, timed-out leg,
 and a write that throws.
@@ -148,6 +148,18 @@ construction rather than by calculation:
   direction because the head is only ever being slowed down; it is speeding a
   move up that runs into the motor ceiling. The UI shows the percentage it will
   command, and says so when even 1% still finishes early.
+
+**They are commanded together, but they do not start together.** The slider's
+streamed velocity begins at zero and takes its ramp to become visible; the
+head's recall runs the device's own much shorter acceleration. Commanded on the
+same tick, the head is seen to move first. That gap lives inside the device and
+was never captured, so nothing here can compute it. Three things address it:
+the profile is sampled at the middle of each tick rather than its leading edge,
+so the opening frame carries real velocity instead of a literal zero; the
+acceleration dial maps geometrically, so mid-dial is a short ramp rather than
+a second of creep; and **Head start delay** in Settings holds the recall back
+by an amount you dial in by watching, with the wait taken off the head's solved
+duration so it still arrives on time.
 
 Consequences worth knowing before you shoot:
 

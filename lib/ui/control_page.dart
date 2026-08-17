@@ -1041,6 +1041,33 @@ class _ControlPageState extends State<ControlPage> with WidgetsBindingObserver {
                         setSheet(() {});
                       },
                     ),
+                    LabelledSlider(
+                      label: 'Head start delay — hold it back off the line',
+                      value: _keyposes.timing.headDelaySeconds,
+                      min: 0,
+                      max: MoveTiming.maxHeadDelaySeconds,
+                      display: _keyposes.timing.headDelaySeconds < 0.05
+                          ? 'none'
+                          : '${_keyposes.timing.headDelaySeconds.toStringAsFixed(2)} s',
+                      onChanged: (v) async {
+                        await _keyposes.saveTiming(
+                            _keyposes.timing.copyWith(headDelaySeconds: v));
+                        setState(() {});
+                        setSheet(() {});
+                      },
+                    ),
+                    Text(
+                      'The slider’s velocity ramps up from zero; the head’s '
+                      'recall uses the device’s own much shorter acceleration, '
+                      'so commanded together the head is seen to move first. '
+                      'That gap is inside the device and was never captured, so '
+                      'it cannot be computed — dial it out by watching. The '
+                      'wait comes off the head’s solved time, so it still '
+                      'arrives with the slider. Raising Accel shortens the '
+                      'slider’s ramp and needs less of this.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    Gap.sm,
                     Text(
                       _keyposes.timing.headSolvedPercent == null
                           ? 'Without this the head runs at its manual speed and '

@@ -196,6 +196,7 @@ class MoveTiming {
     this.head,
     this.shotSeconds = 5.0,
     this.matchDurations = true,
+    this.headDelaySeconds = 0.0,
   });
 
   final SliderTiming? slider;
@@ -207,6 +208,34 @@ class MoveTiming {
   /// When false, each device just uses its own speed setting and the durations
   /// are whatever they are.
   final bool matchDurations;
+
+  /// How long to hold the head's recall back after the leg begins.
+  ///
+  /// Both axes are commanded on the same tick, but the slider's streamed
+  /// profile starts at zero velocity and takes its ramp to become visible,
+  /// while the head's recall runs the device's own much shorter acceleration.
+  /// Commanded together, the head is seen to move first. The difference is a
+  /// property of the device's internal profile, which was never captured, so it
+  /// cannot be computed — only dialled out by watching.
+  ///
+  /// The wait is taken off the head's solved duration, so it still arrives with
+  /// the slider rather than finishing late.
+  final double headDelaySeconds;
+
+  static const maxHeadDelaySeconds = 2.0;
+
+  Duration get headDelay => Duration(
+      milliseconds:
+          (headDelaySeconds.clamp(0.0, maxHeadDelaySeconds) * 1000).round());
+
+  /// The duration the head's recall is solved against: the leg, less whatever
+  /// it spends waiting to start.
+  Duration get headSolveTarget {
+    final left = shot - headDelay;
+    return left < const Duration(milliseconds: 100)
+        ? const Duration(milliseconds: 100)
+        : left;
+  }
 
   static const minShotSeconds = 0.5;
   static const maxShotSeconds = 120.0;
@@ -244,12 +273,13 @@ class MoveTiming {
         head: HeadTiming(referenceDuration: d, referencePercent: 100),
         shotSeconds: shotSeconds,
         matchDurations: matchDurations,
+        headDelaySeconds: headDelaySeconds,
       );
 
   /// The speed percentage the head will be commanded at for a [shot]-long leg,
   /// or null if there is no reference yet. Shown in the UI so the dial is not
   /// operating blind.
-  double? get headSolvedPercent => head?.solve(shot).percent;
+  double? get headSolvedPercent => head?.solve(headSolveTarget).percent;
 
   /// True when the head cannot be slowed enough to fill the shot — its solved
   /// percentage would fall below 1. The move will finish early no matter what.
@@ -259,7 +289,7 @@ class MoveTiming {
     // Below 1% there is nowhere left to go, so the head arrives early whatever
     // is commanded.
     return h.referenceDuration.inMilliseconds * h.referencePercent /
-            shot.inMilliseconds <
+            headSolveTarget.inMilliseconds <
         1;
   }
 
@@ -271,6 +301,7 @@ class MoveTiming {
     HeadTiming? head,
     double? shotSeconds,
     bool? matchDurations,
+    double? headDelaySeconds,
     bool clearHead = false,
   }) =>
       MoveTiming(
@@ -278,6 +309,7 @@ class MoveTiming {
         head: clearHead ? null : (head ?? this.head),
         shotSeconds: shotSeconds ?? this.shotSeconds,
         matchDurations: matchDurations ?? this.matchDurations,
+        headDelaySeconds: headDelaySeconds ?? this.headDelaySeconds,
       );
 
   String encode() => jsonEncode({
@@ -285,6 +317,7 @@ class MoveTiming {
         'head': head?.toJson(),
         'shotSeconds': shotSeconds,
         'matchDurations': matchDurations,
+        'headDelaySeconds': headDelaySeconds,
       });
 
   static MoveTiming decode(String? raw) {
@@ -304,6 +337,11 @@ class MoveTiming {
         matchDurations: j['matchDurations'] is bool
             ? j['matchDurations']! as bool
             : true,
+        headDelaySeconds: j['headDelaySeconds'] is num
+            ? (j['headDelaySeconds']! as num)
+                .toDouble()
+                .clamp(0.0, maxHeadDelaySeconds)
+            : 0.0,
       );
     } catch (_) {
       return const MoveTiming();

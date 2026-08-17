@@ -97,6 +97,7 @@ class FakeHead implements EkMotionTarget {
   bool _linkUp = true;
   int stops = 0;
   final velocities = <int>[];
+  final recalls = <int>[];
 
   @override
   EkKind get kind => EkKind.head;
@@ -114,7 +115,8 @@ class FakeHead implements EkMotionTarget {
   Stream<EkSnapshot> get snapshots => const Stream.empty();
 
   @override
-  Future<void> recallPose(int slot, {required MotionSettings settings}) async {}
+  Future<void> recallPose(int slot, {required MotionSettings settings}) async =>
+      recalls.add(slot);
 
   @override
   Future<void> savePose(int slot) async {}
@@ -165,6 +167,8 @@ class RecordingAxis implements SyncAxis {
 }
 
 void main() {
+  _headStartTests();
+
   group('profile', () {
     test('starts at 0, ends at 1, is halfway at halfway', () {
       expect(syncProfile(0), 0);
@@ -602,6 +606,90 @@ void main() {
         () {
       expect(HeadSyncAxis(target: FakeHead(), peakVelocity: 1000).begin(),
           isTrue);
+    });
+  });
+}
+
+/// The head's recall against the shared clock: when it is issued, and why it
+/// can be held back.
+void _headStartTests() {
+  group('head start delay', () {
+    test('issues the recall immediately when there is no delay', () async {
+      final head = FakeHead();
+      final axis = PoseRecallSyncAxis(
+        target: head,
+        slot: 0,
+        settings: const MotionSettings(),
+      );
+      axis.begin();
+      await axis.step(0.0, const Duration(seconds: 5));
+
+      expect(head.recalls, [0]);
+    });
+
+    test('holds the recall until the delay has elapsed', () async {
+      final head = FakeHead();
+      final axis = PoseRecallSyncAxis(
+        target: head,
+        slot: 3,
+        settings: const MotionSettings(),
+        startDelay: const Duration(milliseconds: 500),
+      );
+      axis.begin();
+
+      // 0.5 s into a 5 s leg is u = 0.1.
+      await axis.step(0.0, const Duration(seconds: 5));
+      await axis.step(0.05, const Duration(seconds: 5));
+      expect(head.recalls, isEmpty, reason: 'went out before its time');
+
+      await axis.step(0.1, const Duration(seconds: 5));
+      expect(head.recalls, [3]);
+    });
+
+    test('only ever issues once, however many ticks pass', () async {
+      final head = FakeHead();
+      final axis = PoseRecallSyncAxis(
+        target: head,
+        slot: 1,
+        settings: const MotionSettings(),
+        startDelay: const Duration(milliseconds: 200),
+      );
+      axis.begin();
+      for (var i = 0; i <= 20; i++) {
+        await axis.step(i / 20, const Duration(seconds: 2));
+      }
+
+      expect(head.recalls, [1]);
+    });
+  });
+
+  group('the first command is not a standstill', () {
+    test('the slider is already moving on the very first frame', () async {
+      final rail = FakeRail(start: 0);
+      final move = SyncMove(
+        axes: [SliderSyncAxis(target: rail, targetCounts: 20000)],
+        stillRunning: () => true,
+        tick: const Duration(milliseconds: 100),
+      );
+
+      await move.run(const Duration(seconds: 2));
+
+      // Sampled at the middle of the tick it is held over, so the opening
+      // frame carries real velocity instead of telling the slider to hold
+      // still while the head is already moving.
+      expect(rail.velocities.first.abs(), greaterThan(0));
+    });
+
+    test('and still finishes at a standstill', () async {
+      final rail = FakeRail(start: 0);
+      final move = SyncMove(
+        axes: [SliderSyncAxis(target: rail, targetCounts: 20000)],
+        stillRunning: () => true,
+        tick: const Duration(milliseconds: 100),
+      );
+
+      await move.run(const Duration(milliseconds: 1500));
+      expect(rail.velocities.last, 0);
     });
   });
 }
