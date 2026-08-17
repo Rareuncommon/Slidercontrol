@@ -134,6 +134,20 @@ class KeyposeController {
   /// been reset — the device was power-cycled, so the rail must be re-homed.
   bool datumStale = false;
 
+  /// True only when the current datum was measured by touching a real end stop
+  /// during this run of the app.
+  ///
+  /// A remembered datum is good enough for the things that stay bounded by live
+  /// telemetry — showing where a pose sits, steering a synced move — but it is
+  /// worth distinguishing before anything drives the carriage on its authority.
+  /// The position counter restarts at an arbitrary value on power-up (§5), and
+  /// the range check that guards a remembered datum can only catch a reset that
+  /// lands well outside the rail, not one that happens to land inside it.
+  bool datumMeasuredThisSession = false;
+
+  /// True when the datum came from a previous run and has not been re-measured.
+  bool get datumIsRemembered => datum != null && !datumMeasuredThisSession;
+
   Future<void> _persistDatum() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -404,6 +418,7 @@ class KeyposeController {
   Future<void> setDatum(RailDatum d) async {
     datum = d;
     datumStale = false;
+    datumMeasuredThisSession = true;
     // A freshly measured datum outranks anything stored from a previous run.
     _unconfirmedDatum = null;
     await _persistDatum();

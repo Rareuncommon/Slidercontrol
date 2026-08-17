@@ -9,6 +9,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../ble/ek_connection.dart';
 import '../control/homing.dart';
@@ -53,8 +54,11 @@ class _HomingDialogState extends State<HomingDialog> {
   void _note(String message) {
     if (!mounted) return;
     setState(() {
-      _log.add(message);
-      if (_log.length > 40) _log.removeAt(0);
+      // Deep enough to hold a whole pass at two trace lines a second, because
+      // the useful part of an abort is what led up to it, not the last line.
+      _log.add('${DateTime.now().toIso8601String().substring(11, 23)}  '
+          '$message');
+      if (_log.length > 600) _log.removeAt(0);
     });
   }
 
@@ -83,7 +87,9 @@ class _HomingDialogState extends State<HomingDialog> {
         _note('Datum established: ${datum.travel} counts of travel.');
       } else {
         _note('Already homed — reusing the existing reference '
-            '(${datum.travel} counts). Use Home slider to re-establish it.');
+            '(${datum.travel} counts, '
+            '${widget.keyposes.datumMeasuredThisSession ? 'measured this session' : 'remembered from a previous run'}). '
+            'Use Home slider to re-establish it.');
       }
 
       if (_isRestore) {
@@ -209,6 +215,17 @@ class _HomingDialogState extends State<HomingDialog> {
                     'restored. Only poses saved while homed carry a fraction.',
                     style: theme.textTheme.bodySmall,
                   ),
+                  if (widget.keyposes.datumIsRemembered)
+                    const Caution(
+                      'The reference being used was remembered from a previous '
+                      'run of the app, not measured this session. That is right '
+                      'if the slider has stayed powered — but its position '
+                      'counter restarts at an arbitrary value on power-up (§5), '
+                      'and a reset that happens to land inside the rail cannot '
+                      'be detected. If the slider has been switched off since, '
+                      'home it first: this drives the carriage on that '
+                      'reference’s authority.',
+                    ),
                 ],
                 const Caution(
                   'The head is never homed. It has no end stops and reports no '
@@ -259,6 +276,26 @@ class _HomingDialogState extends State<HomingDialog> {
                 if (_error != null) ...[
                   Gap.sm,
                   ErrorBanner(_error!),
+                ],
+                if (_started) ...[
+                  Gap.sm,
+                  TextButton.icon(
+                    icon: const Icon(Icons.copy_all, size: 18),
+                    label: const Text('Copy log'),
+                    onPressed: () async {
+                      await Clipboard.setData(ClipboardData(
+                        text: [
+                          if (_error != null) 'ABORTED: $_error',
+                          ..._log,
+                        ].join('\n'),
+                      ));
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Log copied.')),
+                        );
+                      }
+                    },
+                  ),
                 ],
               ],
             ],
