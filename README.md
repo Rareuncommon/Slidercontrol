@@ -30,10 +30,19 @@ A motor is attached to a camera. These are not theoretical.
   SliderPLUS's mid-rail mechanism transition imitates an end stop (§7).
 - **The slider has no soft limits.** It will drive into its mechanical stops and
   grind indefinitely.
-- Unattended motion uses pose recalls, never streamed velocity. A recall is one
-  command the device finishes on its own, so a dropped link ends stopped.
-  Streamed velocity keeps running if the host vanishes — which is why jogging is
-  hold-to-move only.
+- Pose recalls are preferred over streamed velocity. A recall is one command the
+  device finishes on its own, so a dropped link ends stopped. Streamed velocity
+  keeps running if the host vanishes — which is why jogging is hold-to-move
+  only. **Synchronised moves are the deliberate exception**: they stream
+  velocity to the slider because that is the only way to impose an exact
+  duration, so they are for attended shooting. Every exit path — completion,
+  stop, lost link, a write that throws — stops every axis.
+- **A homed reference survives an app restart but not a device power cycle.**
+  The carriage is assumed not to have moved while the app was closed. The
+  position counter restarts at an arbitrary value on power-up (§5), so the
+  stored reference is checked against the live counter as soon as telemetry
+  arrives, and discarded with a warning if the carriage now reads somewhere the
+  rail does not reach.
 - **Escape stops everything, from any screen.** So does STOP ALL on the device
   list, and both go through `StopRegistry`, which tears down the ping-pong loop
   as well as writing the stop. Halting the motor while the loop still runs only
@@ -60,7 +69,9 @@ A motor is attached to a camera. These are not theoretical.
 | `lib/control/ping_pong.dart` | Host-supervised loop between two poses. |
 | `lib/control/fleet.dart` | Several devices moving together. Pure. |
 | `lib/control/homing.dart` | Homing, stall detection, closed-loop moves. Pure. |
-| `lib/control/move_timing.dart` | Solving each axis's speed for a shared duration. Pure. |
+| `lib/control/move_timing.dart` | Solving each axis's speed for a shared duration. Pure. Fallback only. |
+| `lib/control/sync_move.dart` | One move, both axes driven from one host clock. Pure. |
+| `lib/control/sync_ping_pong.dart` | Ping-pong where every leg is a synchronised move. Pure. |
 | `lib/control/pose_store.dart` | Keypose slots and their persistence. Pure. |
 | `lib/control/keypose_controller.dart` | Keyposes across every device. |
 | `lib/ui/control_page.dart` | The single, non-scrolling control page. |
@@ -81,7 +92,7 @@ flutter pub get
 dart test
 ```
 
-145 tests, no hardware and no Flutter binding required. They cover the protocol
+186 tests, no hardware and no Flutter binding required. They cover the protocol
 against the captured bytes, plus the motion logic — including that a stop goes
 out on every exit path: normal completion, user stop, lost link, timed-out leg,
 and a write that throws.
@@ -99,6 +110,47 @@ and a write that throws.
 
 CoreBluetooth hides MAC addresses and issues per-host UUIDs, so devices are
 matched on advertised name (`SldrPlsV1`, `HeadOneFM`) rather than by identifier.
+
+## Synchronised moves
+
+Both axes start and stop at the same instant. That is the whole point of a
+two-axis shot, and it is harder than it sounds.
+
+**What does not work: solving for a speed percentage.** The obvious approach is
+to predict how long each device's pose recall will take at a given speed and
+pick percentages that make the two durations match. Two things defeat it. The
+motor saturates — §6 measures a recall at ~16,600 counts/sec at roughly 47%,
+while full-stick jog is only ~30,500 counts/sec, so a `duration ∝ 1/percent`
+model would predict ~35,000 counts/sec at 100%, past what the hardware can do,
+and nothing in the captures says where the curve flattens. And the head cannot
+be measured at all (§5), so even a correct model could never be checked against
+it. This was implemented, tested against the model, and did not work on
+hardware. `move_timing.dart` is what remains of it; it is now only the fallback
+for when the rail has not been homed.
+
+**What works: imposing the duration.** `sync_move.dart` ticks one host clock and
+commands every axis from it, so the moves begin and end together by
+construction rather than by calculation:
+
+- The **slider** is velocity-streamed closed loop against its reported position,
+  following a smoothstep so it eases in and out. It arrives at a target count,
+  at the requested time.
+- The **head** gets its ordinary pose recall, issued on the same tick as the
+  slider's first command and stopped on the same tick as its last. Its own
+  profile runs in between. It has to be this way: with no position reported,
+  the host cannot know which way to turn the head or how far.
+
+Consequences worth knowing before you shoot:
+
+- Asking for a shot shorter than the slider can physically manage **extends the
+  leg** rather than letting it arrive short. The UI shows the duration that will
+  actually be used.
+- Asking for a shot shorter than the head needs **truncates the head**, because
+  stopping together is the guarantee being kept. Time the shot against the
+  slower axis.
+- This streams velocity, which §7 warns keeps running if the host vanishes. It
+  is for attended shooting. It requires a homed rail, and falls back to
+  independent pose recalls when there is no homed target to steer to.
 
 ## Known gaps
 
@@ -118,20 +170,17 @@ These come from the spec, not from the implementation:
 - **Only 1% and 100% were measured.** Everything between is modelled.
 - **Coordinated slider + head moves are not implemented** (§8). The official
   app pairs the units and captures both axes into a single keypose; that path
-  was never captured, so nothing here reproduces it. "Move together" is
-  host-side coordination instead: each device gets an ordinary pose recall at
-  the same moment, and none starts its next leg until all have finished this
-  one. Within a leg the axes run at their own rates and can drift — match their
-  speeds if you need them to arrive together.
+  was never captured, so nothing here reproduces it. What the app does instead
+  is drive both axes from one host clock — see **Synchronised moves** below.
 - Point Tracking is not implemented (§8); it needs edelkrone's inverse
   kinematics, not just the protocol.
 - **The head's move duration cannot be measured.** It reports no position and
-  no motion state (§5), so making both axes take the same time relies on a
-  human timing one head move. That calibration is only valid for the poses it
-  was taken between, because there is no way to know how far apart two head
-  poses are. Decoding the 16-byte `0x05` frame §5 suspects carries head
-  progress would remove the need entirely — **this is the single capture that
-  would most improve the app.**
+  no motion state (§5). The synchronised path does not need that measurement —
+  it imposes the duration rather than predicting it — but it still cannot know
+  how far the head has to travel, so a shot shorter than the head really needs
+  truncates the head's move. Decoding the 16-byte `0x05` frame §5 suspects
+  carries head progress would remove the limitation entirely — **this is the
+  single capture that would most improve the app.**
 - **Head poses cannot be restored after a power cycle.** The head reports no
   position (§5), so there is nothing to record and nothing to verify arrival
   against. Jogging open-loop for a stored duration would drift with battery and

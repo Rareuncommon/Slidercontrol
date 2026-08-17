@@ -21,6 +21,7 @@ import 'homing.dart';
 import 'motion_settings.dart';
 import 'move_timing.dart';
 import 'pose_store.dart';
+import 'sync_move.dart';
 
 class KeyposeController {
   KeyposeController({required this.devices, required this.settingsFor});
@@ -32,6 +33,7 @@ class KeyposeController {
 
   static const _key = 'keyposes_v1';
   static const _timingKey = 'move_timing_v1';
+  static const _datumKey = 'rail_datum_v1';
 
   PoseSet poses = PoseSet.initial();
 
@@ -60,9 +62,90 @@ class KeyposeController {
       // and nothing can read a pose back off it (§3).
       poses = PoseSet.decode(prefs.getString(_key)).asUnverified();
       timing = MoveTiming.decode(prefs.getString(_timingKey));
+      _loadDatum(prefs.getStringList(_datumKey));
     } catch (_) {
       poses = PoseSet.initial();
       timing = const MoveTiming();
+    }
+  }
+
+  /// Restores a datum from a previous run.
+  ///
+  /// The carriage is assumed not to have moved while the app was closed, so a
+  /// datum survives a restart and is only replaced by homing again. That
+  /// assumption is safe as long as the DEVICE stayed powered: the position
+  /// counter restarts at an arbitrary value on power-up (§5), which would make
+  /// a stored datum point at the wrong part of the rail.
+  ///
+  /// So the stored datum is checked against the live counter, and discarded if
+  /// the carriage now reads somewhere the rail does not reach. That catches a
+  /// power cycle without needing the device to tell us about one.
+  void _loadDatum(List<String>? raw) {
+    _unconfirmedDatum = raw;
+    _applyStoredDatum();
+  }
+
+  /// A stored datum that has not yet been checked against the live counter.
+  ///
+  /// At load time telemetry has usually not arrived, so there is no position to
+  /// check against and the datum is adopted provisionally. It stays here until
+  /// a real position confirms or refutes it.
+  List<String>? _unconfirmedDatum;
+
+  /// Re-checks a restored datum once telemetry is flowing.
+  ///
+  /// Returns true if this call is what discovered the counter had been reset,
+  /// so the caller can say so exactly once.
+  bool revalidateDatum() {
+    if (_unconfirmedDatum == null || sliderPosition == null) return false;
+    final wasStale = datumStale;
+    _applyStoredDatum();
+    return datumStale && !wasStale;
+  }
+
+  void _applyStoredDatum() {
+    final raw = _unconfirmedDatum;
+    if (raw == null || raw.length < 3) return;
+    final lo = int.tryParse(raw[0]);
+    final hi = int.tryParse(raw[1]);
+    final sign = int.tryParse(raw[2]);
+    if (lo == null || hi == null || sign == null || hi <= lo) {
+      _unconfirmedDatum = null;
+      return;
+    }
+
+    final here = sliderPosition;
+    if (here != null) {
+      // One rail length of slack either side: enough for the counter to sit a
+      // little outside the measured ends, nowhere near enough to hide a reset.
+      final span = hi - lo;
+      _unconfirmedDatum = null;
+      if (here < lo - span || here > hi + span) {
+        datum = null;
+        datumStale = true;
+        unawaited(_persistDatum());
+        return;
+      }
+    }
+    datum = RailDatum(endLo: lo, endHi: hi, velocitySign: sign);
+  }
+
+  /// True when a stored datum was discarded because the counter had clearly
+  /// been reset — the device was power-cycled, so the rail must be re-homed.
+  bool datumStale = false;
+
+  Future<void> _persistDatum() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final d = datum;
+      if (d == null) {
+        await prefs.remove(_datumKey);
+        return;
+      }
+      await prefs.setStringList(_datumKey,
+          ['${d.endLo}', '${d.endHi}', '${d.velocitySign}']);
+    } catch (_) {
+      // Losing the datum costs a re-home, not a failed command.
     }
   }
 
@@ -176,6 +259,112 @@ class KeyposeController {
     return failures;
   }
 
+  /// Where the carriage should end up for [slot], in this session's counts.
+  ///
+  /// A fraction of measured travel is preferred over stored raw counts whenever
+  /// both exist: the fraction is the part that stays true across a power cycle,
+  /// while raw counts are only meaningful within the session that recorded them
+  /// (§5).
+  int? sliderTargetFor(int slot) {
+    final pose = poses.bySlot(slot);
+    if (pose == null) return null;
+    final d = datum;
+    final f = pose.fraction;
+    if (d != null && f != null) return d.clampSoft(d.fractionToCounts(f));
+    return pose.counts;
+  }
+
+  /// Whether a synchronised leg to [slot] is possible.
+  ///
+  /// It needs a slider position to close the loop against and a target to close
+  /// it toward. Without both, the only honest option is an ordinary recall on
+  /// every device, with no duration guarantee.
+  bool canSync(int slot) =>
+      slider != null &&
+      sliderPosition != null &&
+      sliderTargetFor(slot) != null;
+
+  /// The axes for one synchronised leg to [slot].
+  ///
+  /// Rebuilt for every leg, because the slider's velocity profile is computed
+  /// from wherever the carriage is *now*, not from where it was when the loop
+  /// started.
+  ///
+  /// The slider is velocity-driven closed loop. Every other device — in
+  /// practice the head — gets its own pose recall, started and stopped on the
+  /// same clock, because nothing here can know how far its axis has to travel
+  /// (§5).
+  List<SyncAxis> syncAxesFor(int slot) {
+    final axes = <SyncAxis>[];
+    for (final d in devices) {
+      if (!d.snapshot.isReady) continue;
+      final target = d.kind == EkKind.slider ? sliderTargetFor(slot) : null;
+      if (d.kind == EkKind.slider &&
+          target != null &&
+          d.snapshot.position != null) {
+        axes.add(SliderSyncAxis(
+          target: d,
+          targetCounts: target,
+          name: _name(d),
+          velocitySign: datum?.velocitySign ?? 1,
+          // The Speed slider sets the ceiling, exactly as it does for jogging —
+          // it is the same streamed-velocity command underneath (§4).
+          maxVelocity: settingsFor(d.kind).jogVelocity(),
+        ));
+      } else {
+        axes.add(PoseRecallSyncAxis(
+          target: d,
+          slot: slot,
+          settings: settingsFor(d.kind),
+          name: _name(d),
+        ));
+      }
+    }
+    return axes;
+  }
+
+  /// Recalls [slot] with both axes moving on one clock.
+  ///
+  /// Returns null on success, or the reason it did not complete. Falls back to
+  /// nothing: callers check [canSync] first and use [recall] otherwise, so a
+  /// missing calibration degrades to an ordinary recall rather than to a move
+  /// that claims a duration it cannot keep.
+  Future<String?> recallSynced(
+    int slot, {
+    required bool Function() stillRunning,
+    void Function(SyncProgress)? onProgress,
+  }) async {
+    final move = SyncMove(
+      axes: syncAxesFor(slot),
+      stillRunning: stillRunning,
+      onProgress: onProgress,
+    );
+    final min = move.minimumDuration;
+    final want = timing.shot;
+    switch (await move.run(min > want ? min : want)) {
+      case SyncOutcome.done:
+      case SyncOutcome.stopped:
+        return null;
+      case SyncOutcome.linkLost:
+        return 'link lost mid-move';
+      case SyncOutcome.failed:
+        return 'a device would not take the command';
+    }
+  }
+
+  /// How long a synchronised leg to [slot] will really take.
+  ///
+  /// Equal to the shot duration unless the slider physically cannot cover the
+  /// distance that fast, in which case the move is extended rather than being
+  /// allowed to arrive short.
+  Duration effectiveLeg(int slot) {
+    final min =
+        SyncMove(axes: syncAxesFor(slot), stillRunning: () => true)
+            .minimumDuration;
+    final want = timing.shot;
+    return min > want ? min : want;
+  }
+
   /// Forgets the app's record of a slot.
   ///
   /// There is no clear-a-pose command in the captures, so the device keeps
@@ -214,6 +403,10 @@ class KeyposeController {
   /// fraction, so it becomes restorable.
   Future<void> setDatum(RailDatum d) async {
     datum = d;
+    datumStale = false;
+    // A freshly measured datum outranks anything stored from a previous run.
+    _unconfirmedDatum = null;
+    await _persistDatum();
     poses = PoseSet([
       for (final p in poses.poses)
         p.counts != null && p.fraction == null
