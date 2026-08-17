@@ -224,6 +224,21 @@ class Homing {
     ));
   }
 
+  /// Reports using a position already in hand.
+  ///
+  /// The trace emits inside the drive loops must not read the snapshot again.
+  /// Reading it is not free — it is what samples the device — and doing so off
+  /// the loop's own cadence perturbs the very timing the loop is measuring.
+  void _emitAt(HomingStage stage, String message, int position,
+      {int? travelled}) {
+    onProgress?.call(HomingProgress(
+      stage: stage,
+      message: message,
+      position: position,
+      travelled: travelled,
+    ));
+  }
+
   void _assertSlider() {
     if (target.kind != EkKind.slider) {
       throw HomingAborted(
@@ -259,7 +274,11 @@ class Homing {
       while (elapsed < timeout) {
         if (!stillRunning()) throw HomingAborted('stopped');
         if (!target.snapshot.isReady) {
-          throw HomingAborted('BLE link lost mid-move');
+          throw HomingAborted(
+            'BLE link lost mid-move — link is '
+            '${target.snapshot.link.name} after ${elapsed.inMilliseconds} ms, '
+            'having moved $movedTotal counts.',
+          );
         }
 
         await target.setVelocity(velocity);
@@ -276,13 +295,18 @@ class Homing {
         // arriving, refuse to judge rather than reading a frozen counter as a
         // stalled carriage.
         final lastFrame = snapshot.lastFrameAt;
-        final stale = lastFrame == null ||
-            DateTime.now().difference(lastFrame) > telemetryStaleAfter;
-        if (stale) {
+        final age = lastFrame == null
+            ? null
+            : DateTime.now().difference(lastFrame);
+        if (age == null || age > telemetryStaleAfter) {
           throw HomingAborted(
-            'telemetry stopped arriving, so progress cannot be judged. '
-            'Nothing is reported without the 250 ms keepalive (§1) — check the '
-            'link before homing again.',
+            'telemetry stopped arriving, so progress cannot be judged. Last '
+            'frame ${age == null ? 'never' : '${age.inMilliseconds} ms ago'} '
+            '(limit ${telemetryStaleAfter.inMilliseconds} ms), '
+            '${snapshot.framesReceived} frames received, position $pos, '
+            '${elapsed.inMilliseconds} ms into the pass having moved '
+            '$movedTotal counts. Nothing is reported without the 250 ms '
+            'keepalive (§1) — check the link before homing again.',
           );
         }
 
@@ -310,16 +334,42 @@ class Homing {
         // `elapsed > max(0.8, STALL_WINDOW * 1.5)`; this is the same rule
         // expressed directly, which keeps it correct if the tick changes.
         final span = elapsed - history.first.at;
+        final net = (pos - history.first.position).abs();
+
+        // A running trace of the numbers the stall decision is actually made
+        // from. Without it an abort is a bare sentence and the only way to tell
+        // a genuine stop from frozen telemetry is to guess.
+        if (elapsed.inMilliseconds % 500 < tick.inMilliseconds) {
+          _emitAt(
+            HomingStage.seeking,
+            '${elapsed.inMilliseconds} ms · pos $pos · moved $movedTotal · '
+            'net $net over ${span.inMilliseconds} ms '
+            '(stall below ${threshold.round()}) · frame ${age.inMilliseconds} '
+            'ms old',
+            pos,
+            travelled: movedTotal,
+          );
+        }
+
         if (elapsed > spinUp &&
             history.length >= 4 &&
             span >= stallWindow * 0.9) {
-          final net = (pos - history.first.position).abs();
           if (net < threshold) {
+            _emitAt(
+              HomingStage.confirming,
+              'Stalled at $pos: only $net counts in ${span.inMilliseconds} ms, '
+              'against ${threshold.round()} expected.',
+              pos,
+              travelled: movedTotal,
+            );
             return _StallResult(pos, movedTotal);
           }
         }
       }
-      throw HomingAborted('timed out after ${timeout.inSeconds}s');
+      throw HomingAborted(
+        'timed out after ${timeout.inSeconds}s at velocity $velocity, having '
+        'moved $movedTotal counts and never stalled.',
+      );
     } finally {
       await _neutralise();
     }
@@ -372,6 +422,11 @@ class Homing {
     for (var attempt = 1; attempt <= stallConfirmTries; attempt++) {
       final velocity =
           direction * (retesting ? slowVelocity : fastVelocity);
+      _emit(
+        HomingStage.seeking,
+        'Pass $attempt: ${retesting ? 'confirming' : 'fast'} at $velocity '
+        'counts/sec from ${_position ?? 'unknown'}.',
+      );
       final result = await _driveUntilStall(
         velocity,
         timeout: homeTimeout,
@@ -531,19 +586,46 @@ class Homing {
     try {
       while (elapsed < moveTimeout) {
         if (!stillRunning()) return false;
-        if (!target.snapshot.isReady) {
-          throw HomingAborted('BLE link lost mid-move');
+        final snapshot = target.snapshot;
+        if (!snapshot.isReady) {
+          throw HomingAborted(
+            'BLE link lost mid-move — link is ${snapshot.link.name} '
+            '${elapsed.inMilliseconds} ms into a move to $goal.',
+          );
         }
 
-        final pos = _position;
+        final pos = snapshot.position;
         if (pos == null) {
           await Future<void>.delayed(tick);
           elapsed += tick;
           continue;
         }
 
+        // Same reasoning as the seek pass: a frozen counter looks exactly like
+        // a carriage that has arrived, and this loop would report success.
+        final lastFrame = snapshot.lastFrameAt;
+        final age =
+            lastFrame == null ? null : DateTime.now().difference(lastFrame);
+        if (age == null || age > telemetryStaleAfter) {
+          throw HomingAborted(
+            'telemetry stopped arriving during a move to $goal. Last frame '
+            '${age == null ? 'never' : '${age.inMilliseconds} ms ago'}, '
+            '${snapshot.framesReceived} frames received, position $pos, '
+            '${elapsed.inMilliseconds} ms in.',
+          );
+        }
+
         final error = goal - pos;
         if (error.abs() <= moveTolerance) return true;
+
+        if (elapsed.inMilliseconds % 500 < tick.inMilliseconds) {
+          _emitAt(
+            HomingStage.moving,
+            '${elapsed.inMilliseconds} ms · pos $pos · goal $goal · '
+            'error $error · frame ${age.inMilliseconds} ms old',
+            pos,
+          );
+        }
 
         final magnitude = (error.abs() * moveGain)
             .clamp(moveMinVelocity.toDouble(), moveMaxVelocity.toDouble());
