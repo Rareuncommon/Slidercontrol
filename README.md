@@ -27,9 +27,16 @@ A motor is attached to a camera.
   runs until stopped, so nothing depends on the app between legs. Jogging is
   hold-to-move only, and the device stops by itself 1.5 s after the last
   joystick command.
-- **Refuses to move with an unlearnt focus motor.** If the head reports a
-  focus module whose lens has not been learnt, motion commands are refused, as
-  the SDK does. Learn the lens in the edelkrone app first.
+- **A stop cancels a move that has not gone out yet.** A recall or loop that is
+  still reading poses, or still waiting in the command queue, when a stop
+  begins is never sent.
+- **Refuses to move with a focus motor whose lens is not set up.** The SDK
+  refuses motion on a head with a focus motor until `focus.setup()` has run.
+  When the head already has the motor referenced and the lens ends found,
+  `setup()` sends nothing, and the app lets motion through. Otherwise it
+  refuses: set the lens up in the edelkrone app (the head keeps it until it is
+  switched off), or disconnect the focus motor. The rest of `setup()` turns the
+  focus motor and is not ported.
 
 ## Why a Dart port, and not the SDK itself
 
@@ -79,8 +86,9 @@ the head-timing settings and homing are gone.
 Things to know before shooting:
 
 - A recall moves the head **through every pose stored between** the current
-  slot and the target. An empty slot in between stops it, so the app warns
-  before leaving a gap.
+  slot and the target. An empty slot in between stops it. Save only offers the
+  next slot, and a slot emptied by deleting a pose in the middle is shown,
+  marked, so it can be filled again.
 - **Poses live on the head and are deleted when the layout dissolves.**
 - Arrival is verified against the reported position (0.25° / 0.25 cm).
 - Pose names are stored in the app per rig; the poses themselves are on the

@@ -33,11 +33,17 @@ const opGroupSet = 9;
 const opAddPeer = 1;
 
 /// A HeadONE already joined to its slider, connected and polling.
-Future<(Device, FakeHeadLink)> joinedRig({bool focusMotor = false}) async {
+Future<(Device, FakeHeadLink)> joinedRig({
+  bool focusMotor = false,
+  bool focusSetUp = false,
+  Duration latency = const Duration(milliseconds: 3),
+}) async {
   final link = FakeHeadLink(
     unit: fakeHeadUnit(setup: EdlSetup.PAN_AND_SLIDE, group: 0x0101),
     configuration: EdlSetup.PAN_AND_SLIDE,
     focusMotor: focusMotor,
+    focusSetUp: focusSetUp,
+    latency: latency,
   );
   final head = link.device;
   final rig = Rig(master: head, slaves: [], setup: EdlSetup.PAN_AND_SLIDE, resolved: null);
@@ -292,6 +298,48 @@ void main() {
       expect(link.legsCompleted, legs, reason: 'stopped means stopped');
       await d.disconnect();
     });
+
+    test('a stop while a move is being prepared means the move is never sent', () async {
+      // Slow replies, so the move's preflight reads take a while.
+      final (d, link) = await joinedRig(latency: const Duration(milliseconds: 20));
+      await d.poses.store(0);
+      link.pan = 40;
+      await d.poses.store(1);
+      final moving = d.poses.moveTo(0);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await d.move.stop(settle: 0);
+      final out = await moving;
+      expect(out.accepted, isFalse);
+      expect(out.reason, 'stopped before the move was sent');
+      expect(link.ops(opMove), isEmpty);
+      expect(link.pan, 40, reason: 'nothing moved');
+
+      final looping = d.poses.startMoveTo(1, start: 0, style: const MoveStyle(loop: true));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await d.move.stop(settle: 0);
+      expect(await looping, isFalse);
+      expect(link.ops(opMove), isEmpty);
+      await d.disconnect();
+    });
+
+    test('a stop that overtakes a queued move cancels it', () async {
+      final (d, link) = await joinedRig();
+      link.silent = true; // replies stop, so the queue backs up
+      final poll = d.session.send(d.session.commands.statusGet(), timeout: 0.3).catchError((_) => null);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      var stopped = false;
+      final move = d.session.sendUnlessCancelled(
+        d.session.commands.keyposeMove(const MoveStyle().request(0)),
+        () => stopped,
+      );
+      stopped = true;
+      final abort = d.session.motionAbort().catchError((_) {});
+      expect(await move, isFalse);
+      await Future.wait([poll, abort]);
+      expect(link.ops(opMove), isEmpty);
+      expect(link.ops(opAbort), isNotEmpty);
+      await d.disconnect();
+    });
   });
 
   group('the focus gate', () {
@@ -304,6 +352,17 @@ void main() {
       await expectLater(d.poses.moveTo(0), throwsA(isA<EdelkroneError>()));
       expect(link.ops(opPanTilt), isEmpty);
       // Stopping is always allowed.
+      await d.move.stop(settle: 0);
+      await d.disconnect();
+    });
+
+    test('a head that already knows its lens is let through, as SDK setup() would', () async {
+      final (d, link) = await joinedRig(focusMotor: true, focusSetUp: true);
+      expect(d.status.hasFocusMotor, isTrue);
+      expect(d.status.focusIsSetUp, isTrue);
+      await jog(d, pan: 0.3, ticks: 2);
+      expect(link.ops(opPanTilt), isNotEmpty);
+      expect(await d.poses.store(0), isTrue);
       await d.move.stop(settle: 0);
       await d.disconnect();
     });

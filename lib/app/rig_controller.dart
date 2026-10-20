@@ -344,6 +344,18 @@ class RigController {
       if (s < poseSlots) s,
   ];
 
+  /// Empty slots between stored poses — left by deleting one in the middle.
+  /// A head will not move across them, so they are offered for saving into.
+  List<int> get gaps {
+    final have = stored.toSet();
+    if (have.isEmpty) return const [];
+    final hi = have.reduce((a, b) => a > b ? a : b);
+    return [
+      for (var i = 0; i < hi; i++)
+        if (!have.contains(i)) i,
+    ];
+  }
+
   /// The slot "save" should use: the next one after the last stored, because
   /// a head moves through every slot in between and stops at an empty one.
   int? get nextSlot {
@@ -424,7 +436,9 @@ class RigController {
   /// arrive together, and verifies arrival.
   Future<MoveOutcome?> recall(int slot) async {
     if (device == null) return null;
+    final stops = _stops;
     await _stopForAPoseCommand();
+    if (_stops != stops) return null; // STOP ALL while the previous motion was being stopped
     return _recall(slot);
   }
 
@@ -470,7 +484,9 @@ class RigController {
   Future<void> startLoop(int a, int b, {Duration dwell = Duration.zero}) async {
     final d = device;
     if (d == null || a == b) return;
+    final stops = _stops;
     await _stopForAPoseCommand();
+    if (_stops != stops) return;
     _loopRunning = true;
     loopEnds = (a, b);
     error = null;
@@ -483,15 +499,14 @@ class RigController {
       return;
     }
     if (dwell == Duration.zero) {
-      final ok = await _guard(() async {
-        await d.poses.startMoveTo(
+      final sent = await _guard(
+        () => d.poses.startMoveTo(
           b,
           start: a,
           style: MoveStyle(speed: style.speed, acceleration: style.acceleration, loop: true),
-        );
-        return true;
-      });
-      if (ok != true) _loopRunning = false;
+        ),
+      );
+      if (sent != true) _loopRunning = false;
       moving = _loopRunning;
       _notify();
       return;
@@ -518,9 +533,15 @@ class RigController {
 
   bool _stopping = false;
 
+  /// Bumped by STOP ALL. A recall or loop that was waiting for earlier motion
+  /// to stop does not go on to start once STOP ALL has been pressed; one
+  /// already inside the SDK is cancelled there.
+  int _stops = 0;
+
   /// Stops all motion: the joystick, a recall, and the device's loop. The SDK's
   /// stop goes to the front of the command queue and never throws.
   Future<void> stopAll() async {
+    _stops++;
     _stopping = true;
     _stopLocalMotion();
     try {

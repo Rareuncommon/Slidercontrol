@@ -71,6 +71,7 @@ class FakeHeadLink implements DeviceLink {
     EdelkroneDevice? unit,
     EdlSetup configuration = EdlSetup.NONE,
     this.focusMotor = false,
+    this.focusSetUp = false,
     this.latency = const Duration(milliseconds: 3),
   }) : device = unit ?? fakeHeadUnit(),
        _configuration = configuration,
@@ -81,6 +82,9 @@ class FakeHeadLink implements DeviceLink {
   @override
   final EdelkroneDevice device;
   final bool focusMotor;
+
+  /// The head knows its focus motor and lens: referenced, ends found.
+  final bool focusSetUp;
   final Duration latency;
 
   final sent = <Sent>[];
@@ -199,6 +203,10 @@ class FakeHeadLink implements DeviceLink {
     v[4] = _moving ? (((_clock.elapsedMilliseconds - _moveStartedMs) / moveMs).clamp(0, 1) * 100).round() : 0;
     v[6] = _configuration.value;
     v[17] = 12;
+    if (focusSetUp) {
+      v[31] = 1; // isSimpleFocusCalibrationDone
+      v[95] |= 0x1; // focusModuleIsBrushlessCalibrated
+    }
     v[36] = _remoteOk ? 0x2 : 0;
     v[109] = _aim;
     return v;

@@ -228,6 +228,19 @@ class EdelkroneSession {
 
   Future<ResponseFrame?> send(EdelkroneCommand command, {double? timeout}) => _send(command, timeout);
 
+  /// Sends [command] only if [cancelled] is still false when its turn in the
+  /// queue comes, and returns whether it was sent. A stop that goes to the
+  /// front of the queue therefore also cancels a planned move queued behind
+  /// it. An addition to the SDK.
+  Future<bool> sendUnlessCancelled(EdelkroneCommand command, bool Function() cancelled) {
+    _assertUsable();
+    return _serialised(() async {
+      if (cancelled()) return false;
+      await _exchange(command, null);
+      return true;
+    });
+  }
+
   Future<ResponseFrame?> _send(EdelkroneCommand command, double? timeout, {bool first = false}) {
     _assertUsable();
     return _serialised(() => _exchange(command, timeout), first: first);

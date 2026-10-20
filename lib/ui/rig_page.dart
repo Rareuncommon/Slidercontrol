@@ -13,6 +13,7 @@ import 'package:flutter/services.dart';
 
 import '../app/flutter_support.dart';
 import '../app/rig_controller.dart';
+import '../sdk/api/device.dart' show DeviceStatus;
 import '../sdk/motion/pose.dart';
 import '../sdk/protocol/generated/moco.dart';
 import 'jog_pad.dart';
@@ -85,7 +86,7 @@ class _RigPageState extends State<RigPage> {
               Expanded(
                 child: LayoutBuilder(
                   builder: (context, box) {
-                    final pads = _Pads(c: c, enabled: !lost && status?.hasFocusMotor != true);
+                    final pads = _Pads(c: c, enabled: !lost && !_focusBlocks(status));
                     final grid = _PoseGrid(c: c, enabled: !lost, columns: box.maxWidth > box.maxHeight * 1.3 ? 3 : 4);
                     // Wide and short — a phone on its side, a laptop window —
                     // puts the pads beside the poses instead of above them.
@@ -184,7 +185,7 @@ class _StatusStrip extends StatelessWidget {
       if (info != null && !info.firmwareOk) 'firmware below the SDK minimum — update with the edelkrone app',
       if (s?.modulesResponding == false) 'the slider is not answering the head',
       if (s?.orientationWarning == true) 'orientation warning',
-      if (s?.hasFocusMotor == true) 'focus motor fitted: motion refused until the lens is learned (edelkrone app)',
+      if (_focusBlocks(s)) 'focus motor fitted: motion refused until the lens is set up (edelkrone app)',
     ];
     return Container(
       color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
@@ -373,8 +374,9 @@ class _PoseGrid extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final stored = c.stored.toSet();
+    final gaps = c.gaps.toSet();
     final next = c.nextSlot;
-    final shown = <int>{...stored, ?next}.toList()..sort();
+    final shown = <int>{...stored, ...gaps, ?next}.toList()..sort();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Column(
@@ -407,6 +409,7 @@ class _PoseGrid extends StatelessWidget {
                     name: c.names[slot],
                     pose: c.poses[slot],
                     isStored: stored.contains(slot),
+                    isGap: gaps.contains(slot),
                     active: c.activeSlot == slot && (c.moving || c.looping),
                     loopEnd: c.looping && c.loopEnds != null && (c.loopEnds!.$1 == slot || c.loopEnds!.$2 == slot),
                     enabled: enabled,
@@ -491,6 +494,10 @@ class _PoseGrid extends StatelessWidget {
   }
 }
 
+/// Motion is refused: a focus motor is fitted and the head does not yet know
+/// the lens.
+bool _focusBlocks(DeviceStatus? s) => s?.hasFocusMotor == true && s?.focusIsSetUp != true;
+
 String _describe(RigPose? p) {
   if (p == null) return 'position not read';
   return [
@@ -505,6 +512,7 @@ class _PoseTile extends StatelessWidget {
     required this.name,
     required this.pose,
     required this.isStored,
+    this.isGap = false,
     required this.active,
     required this.loopEnd,
     required this.enabled,
@@ -516,6 +524,9 @@ class _PoseTile extends StatelessWidget {
   final String? name;
   final RigPose? pose;
   final bool isStored;
+
+  /// An empty slot between stored poses: moves across it stop.
+  final bool isGap;
   final bool active;
   final bool loopEnd;
   final bool enabled;
@@ -574,8 +585,9 @@ class _PoseTile extends StatelessWidget {
                     ),
                   ),
                 ] else ...[
-                  Icon(Icons.add, color: fg),
+                  Icon(isGap ? Icons.warning_amber : Icons.add, color: isGap ? scheme.error : fg),
                   Text('save as ${slot + 1}', style: TextStyle(color: fg, fontSize: 11)),
+                  if (isGap) Text('empty: moves across it stop', style: TextStyle(color: scheme.error, fontSize: 9)),
                 ],
               ],
             ),

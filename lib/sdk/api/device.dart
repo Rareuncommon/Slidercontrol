@@ -159,6 +159,7 @@ class DeviceStatus {
     this.batteryPercent,
     this.isCalibrated,
     this.hasFocusMotor,
+    this.focusIsSetUp,
     this.layout,
     this.storedPoseSlots = const [],
     this.modulesResponding,
@@ -179,6 +180,12 @@ class DeviceStatus {
   final double? batteryPercent;
   final bool? isCalibrated;
   final bool? hasFocusMotor;
+
+  /// Whether the head already knows its focus motor and lens: the motor
+  /// referenced and the lens ends found, which the device keeps until it is
+  /// switched off. Null without a head status. Motion is refused while a
+  /// focus motor is fitted and this is false.
+  final bool? focusIsSetUp;
   final EdlSetup? layout;
   final List<int> storedPoseSlots;
   final bool? modulesResponding;
@@ -234,6 +241,7 @@ class DeviceStatus {
       batteryPercent: head?.batteryLevel.toDouble() ?? slide?.batteryLevel.toDouble(),
       isCalibrated: head != null ? head.headCalibrated == 1 : (slide != null ? slide.isCalibrated == 1 : null),
       hasFocusMotor: head == null ? null : head.haveFocusModule == 1,
+      focusIsSetUp: head == null ? null : focusIsSetUpIn(head),
       layout: layout ?? reportedLayout,
       storedPoseSlots: storedSlots(state, PoseKind.keypose),
       modulesResponding: responding,
@@ -358,6 +366,7 @@ class Device {
         batteryPercent: s.batteryPercent,
         isCalibrated: s.isCalibrated,
         hasFocusMotor: s.hasFocusMotor,
+        focusIsSetUp: s.focusIsSetUp,
         layout: s.layout,
         storedPoseSlots: s.storedPoseSlots,
         modulesResponding: s.modulesResponding,
@@ -420,22 +429,30 @@ class Device {
 
   // -- the focus gate -----------------------------------------------------------
 
-  bool get _focusFitted {
-    final st = session.state;
-    return st is HeadModuleState && st.generalStatus?.haveFocusModule == 1;
-  }
-
+  /// The SDK refuses motion on a head with a focus motor until
+  /// `focus.setup()` has run on the connection. When the head already has the
+  /// motor referenced and the lens ends found, `setup()` sends nothing and
+  /// moves nothing; that is the only case this port accepts. The rest of
+  /// `setup()` turns the focus motor and is not ported.
   void _requireFocusSetupFirst(String command) {
     session.assertOpen();
-    if (!_focusFitted) return;
+    final st = session.state;
+    final head = st is HeadModuleState ? st.generalStatus : null;
+    if (head == null || head.haveFocusModule != 1 || focusIsSetUpIn(head)) return;
     throw EdelkroneError(
       'needs_focus_setup',
-      '${session.device.displayName} reports a focus motor. The SDK refuses $command until the lens '
-          'has been learned, because a stored pose on this head includes the focus position and would '
-          'otherwise put the ring somewhere unintended. This app does not drive focus: learn the lens in '
-          'the edelkrone app, or disconnect the focus motor, then connect again.',
+      '${session.device.displayName} reports a focus motor whose lens it does not know yet. The SDK '
+          'refuses $command until it does, because a stored pose on this head includes the focus position '
+          'and would otherwise put the ring somewhere unintended. This app does not drive focus: set the '
+          'lens up in the edelkrone app (the head keeps it until it is switched off), or disconnect the '
+          'focus motor.',
     );
   }
+
+  /// Bumped by every stop. A planned move that was still being prepared, or
+  /// still waiting in the queue, when a stop began is not sent. An addition
+  /// to the SDK.
+  int _stops = 0;
 
   // -- driving --------------------------------------------------------------------
 
@@ -548,6 +565,7 @@ class Device {
   /// then zero every other axis, abort again, wait for the device to say it
   /// is stationary, and read where it stopped. Never throws.
   Future<void> _stopDriving({double settle = 2.0}) async {
+    _stops++;
     final held = _held;
     await _release(held);
     if (held.isNotEmpty) {
@@ -856,6 +874,7 @@ class PoseController {
     bool verify = true,
   }) async {
     _d._requireFocusSetupFirst('poses.move_to');
+    final stops = _d._stops;
     if (!timeout.isFinite || timeout <= 0) {
       throw EdelkroneError('bad_argument', 'timeout must be a positive number of seconds, got $timeout');
     }
@@ -881,7 +900,9 @@ class PoseController {
       wanted = await _poseInSlot(slot);
       before = await _livePose();
     }
-    await _s.send(_s.commands.keyposeMove(request));
+    if (!await _s.sendUnlessCancelled(_s.commands.keyposeMove(request), () => _d._stops != stops)) {
+      return _stoppedBeforeSending;
+    }
     final done = await _s.waitUntilIdle(timeout: timeout);
     final elapsed = _s.clock.now() - started;
     if (!done) {
@@ -949,15 +970,28 @@ class PoseController {
 
   /// Sends the move and returns at once. With `MoveStyle(loop: true)` and a
   /// [start] slot, the device runs back and forth between the two poses until
-  /// `move.stop()` — the ping-pong is the DEVICE's, not the app's.
-  Future<void> startMoveTo(int slot, {MoveStyle style = const MoveStyle(), int? start}) async {
+  /// `move.stop()` — the ping-pong is the DEVICE's, not the app's. False if
+  /// a stop began before the move was sent, so it was not.
+  Future<bool> startMoveTo(int slot, {MoveStyle style = const MoveStyle(), int? start}) async {
     _d._requireFocusSetupFirst('poses.start_move_to');
+    final stops = _d._stops;
     _checkSlot('poses.start_move_to', slot);
     if (start != null) _checkSlot('poses.start_move_to', start, name: 'start');
     final request = style.request(slot, start: start);
     await _refreshForAPrecondition();
     final refusal = _emptySlotReason(slot, start);
     if (refusal != null) throw EdelkroneError('bad_argument', refusal);
-    await _s.send(_s.commands.keyposeMove(request));
+    return _s.sendUnlessCancelled(_s.commands.keyposeMove(request), () => _d._stops != stops);
   }
+
+  static const _stoppedBeforeSending = MoveOutcome(
+    accepted: false,
+    completed: false,
+    duration: 0,
+    reason: 'stopped before the move was sent',
+  );
 }
+
+/// The head has its focus motor referenced and the lens ends found.
+bool focusIsSetUpIn(LibHeadModuleMk2Status head) =>
+    head.focusModuleIsBrushlessCalibrated == 1 && head.isSimpleFocusCalibrationDone == 1;

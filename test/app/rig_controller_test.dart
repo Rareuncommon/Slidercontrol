@@ -29,8 +29,8 @@ Future<void> until(bool Function() test, {Duration timeout = const Duration(seco
 }
 
 /// A controller that has found and joined the rig.
-Future<(RigController, FakeHeadLink, StopRegistry)> joined() async {
-  final link = FakeHeadLink(unit: fakeHeadUnit(group: 0x0101));
+Future<(RigController, FakeHeadLink, StopRegistry)> joined({Duration latency = const Duration(milliseconds: 3)}) async {
+  final link = FakeHeadLink(unit: fakeHeadUnit(group: 0x0101), latency: latency);
   final head = link.device;
   final slider = fakeSliderUnit();
   final registry = StopRegistry();
@@ -101,6 +101,39 @@ void main() {
     await c.save(0);
     expect(c.wouldLeaveGap(1), isFalse);
     expect(c.wouldLeaveGap(3), isTrue);
+    await c.disconnect();
+  });
+
+  test('deleting a pose in the middle offers its slot for saving again', () async {
+    final (c, link, _) = await joined();
+    for (final slot in [0, 1, 2]) {
+      link.pan = slot * 20.0;
+      await c.save(slot);
+    }
+    await c.clear(1);
+    expect(c.stored, [0, 2]);
+    expect(c.gaps, [1]);
+    expect(c.nextSlot, 3);
+    expect(await c.save(1), isTrue);
+    expect(c.gaps, isEmpty);
+    await c.disconnect();
+  });
+
+  test('STOP ALL while a recall is being prepared: the recall never moves', () async {
+    final (c, link, registry) = await joined(latency: const Duration(milliseconds: 20));
+    await c.save(0);
+    link.pan = 45;
+    await c.save(1);
+    for (final wait in [Duration.zero, const Duration(milliseconds: 10)]) {
+      final going = c.recall(0);
+      await Future<void>.delayed(wait);
+      await registry.stopAll();
+      final out = await going;
+      expect(out?.isSuccess ?? false, isFalse);
+      expect(link.ops(opMove), isEmpty, reason: 'stopped ${wait.inMilliseconds} ms in');
+      expect(link.pan, 45);
+      expect(c.moving, isFalse);
+    }
     await c.disconnect();
   });
 
