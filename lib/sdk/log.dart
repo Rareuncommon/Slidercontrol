@@ -4,13 +4,13 @@
 /// that nothing is formatted unless a sink is listening.
 library;
 
-enum EdelkroneLogLevel { TRACE, DEBUG, INFO, WARNING, ERROR }
+enum EdelkroneLogLevel { trace, debug, info, warning, error }
 
 typedef EdelkroneLogSink = void Function(EdelkroneLogLevel level, String message);
 
 abstract final class EdelkroneLog {
   static EdelkroneLogSink? sink;
-  static EdelkroneLogLevel minimumLevel = EdelkroneLogLevel.INFO;
+  static EdelkroneLogLevel minimumLevel = EdelkroneLogLevel.info;
 
   static bool isEnabled(EdelkroneLogLevel level) =>
       sink != null && level.index >= minimumLevel.index;
@@ -25,9 +25,9 @@ abstract final class EdelkroneLog {
     }
   }
 
-  static void trace(String Function() message) => _emit(EdelkroneLogLevel.TRACE, message);
-  static void debug(String Function() message) => _emit(EdelkroneLogLevel.DEBUG, message);
-  static void info(String Function() message) => _emit(EdelkroneLogLevel.INFO, message);
-  static void warning(String Function() message) => _emit(EdelkroneLogLevel.WARNING, message);
-  static void error(String Function() message) => _emit(EdelkroneLogLevel.ERROR, message);
+  static void trace(String Function() message) => _emit(EdelkroneLogLevel.trace, message);
+  static void debug(String Function() message) => _emit(EdelkroneLogLevel.debug, message);
+  static void info(String Function() message) => _emit(EdelkroneLogLevel.info, message);
+  static void warning(String Function() message) => _emit(EdelkroneLogLevel.warning, message);
+  static void error(String Function() message) => _emit(EdelkroneLogLevel.error, message);
 }
