@@ -47,8 +47,12 @@ LibEdelkroneMocoAdvData advFor(int last, {EdlSetup setup = EdlSetup.NONE, int gr
       canbusPairingActive: false,
     );
 
-EdelkroneDevice fakeHeadUnit({EdlSetup setup = EdlSetup.NONE, int group = 0xFFFF}) =>
-    EdelkroneDevice(id: 'head', model: models.headOneFm, advData: advFor(1, setup: setup, group: group), rssi: -40);
+EdelkroneDevice fakeHeadUnit({EdlSetup setup = EdlSetup.NONE, int group = 0xFFFF}) => EdelkroneDevice(
+  id: 'head',
+  model: models.headOneFm,
+  advData: advFor(1, setup: setup, group: group),
+  rssi: -40,
+);
 
 EdelkroneDevice fakeSliderUnit() =>
     EdelkroneDevice(id: 'slider', model: models.sliderPlusV1, advData: advFor(2), rssi: -45);
@@ -68,9 +72,9 @@ class FakeHeadLink implements DeviceLink {
     EdlSetup configuration = EdlSetup.NONE,
     this.focusMotor = false,
     this.latency = const Duration(milliseconds: 3),
-  })  : device = unit ?? fakeHeadUnit(),
-        _configuration = configuration,
-        _remoteOk = configuration == EdlSetup.PAN_AND_SLIDE {
+  }) : device = unit ?? fakeHeadUnit(),
+       _configuration = configuration,
+       _remoteOk = configuration == EdlSetup.PAN_AND_SLIDE {
     _physics = Timer.periodic(const Duration(milliseconds: 10), (_) => _step());
   }
 
@@ -202,7 +206,18 @@ class FakeHeadLink implements DeviceLink {
 
   List<int> numericPayload(int index) {
     final (double p, double s) = index == 255 ? (pan, slide) : (stored[index] ?? (0.0, 0.0));
-    return [18, index, ...int32(p, 1000), ...int32(-1, 1000), ...int32(-1, 1000), ...int32(s, 1000), ...int32(-1, 1000), ...int32(-1, 1000), 0, 0];
+    return [
+      18,
+      index,
+      ...int32(p, 1000),
+      ...int32(-1, 1000),
+      ...int32(-1, 1000),
+      ...int32(s, 1000),
+      ...int32(-1, 1000),
+      ...int32(-1, 1000),
+      0,
+      0,
+    ];
   }
 
   @override

@@ -39,23 +39,19 @@ class EdelkroneError implements Exception {
 enum Capability { position, storedPose, manualDrive, focus, settings, tripodLevel }
 
 Set<Capability> capabilitiesOf(DeviceFamily family) => switch (family) {
-      DeviceFamily.headModule => {
-          Capability.manualDrive,
-          Capability.storedPose,
-          Capability.settings,
-          Capability.position,
-          Capability.focus,
-        },
-      DeviceFamily.slideModule || DeviceFamily.jib => {
-          Capability.manualDrive,
-          Capability.storedPose,
-          Capability.settings,
-          Capability.position,
-        },
-      DeviceFamily.dolly => {Capability.manualDrive, Capability.settings},
-      DeviceFamily.focusPlus => {},
-      DeviceFamily.tripod => {Capability.settings, Capability.tripodLevel},
-    };
+  DeviceFamily.headModule => {
+    Capability.manualDrive,
+    Capability.storedPose,
+    Capability.settings,
+    Capability.position,
+    Capability.focus,
+  },
+  DeviceFamily.slideModule ||
+  DeviceFamily.jib => {Capability.manualDrive, Capability.storedPose, Capability.settings, Capability.position},
+  DeviceFamily.dolly => {Capability.manualDrive, Capability.settings},
+  DeviceFamily.focusPlus => {},
+  DeviceFamily.tripod => {Capability.settings, Capability.tripodLevel},
+};
 
 const _head = {RigAxis.pan, RigAxis.tilt};
 const _jibArm = {RigAxis.jibPan, RigAxis.jibTilt};
@@ -92,10 +88,10 @@ final Map<EdlSetup, Set<RigAxis>?> layoutAxes = {
 /// The axes the family's command set can address at all. The SDK finds these
 /// by probing its numeric-move builders; these are the results.
 Set<RigAxis> _commandAxes(DeviceFamily f) => switch (f) {
-      DeviceFamily.headModule => {RigAxis.pan, RigAxis.tilt, RigAxis.slide, RigAxis.jibPan, RigAxis.jibTilt},
-      DeviceFamily.slideModule => {RigAxis.slide},
-      _ => {},
-    };
+  DeviceFamily.headModule => {RigAxis.pan, RigAxis.tilt, RigAxis.slide, RigAxis.jibPan, RigAxis.jibTilt},
+  DeviceFamily.slideModule => {RigAxis.slide},
+  _ => {},
+};
 
 Set<RigAxis> axesOf(EdelkroneSession session, EdlSetup? layout) {
   final out = _commandAxes(session.family);
@@ -333,16 +329,16 @@ class Device {
   Set<RigAxis> drivable() => axesOf(session, layout);
 
   Info get info => _info ??= Info(
-        name: session.device.displayName,
-        mac: session.device.mac,
-        firmware: session.device.firmwareVersion,
-        radioFirmware: session.device.radioVersion,
-        firmwareOk: session.device.firmwareOk,
-        layout: layout,
-        modules: [for (final m in _modules) m.displayName],
-        axes: drivable().toList()..sort((a, b) => a.name.compareTo(b.name)),
-        capabilities: capabilities,
-      );
+    name: session.device.displayName,
+    mac: session.device.mac,
+    firmware: session.device.firmwareVersion,
+    radioFirmware: session.device.radioVersion,
+    firmwareOk: session.device.firmwareOk,
+    layout: layout,
+    modules: [for (final m in _modules) m.displayName],
+    axes: drivable().toList()..sort((a, b) => a.name.compareTo(b.name)),
+    capabilities: capabilities,
+  );
 
   DeviceStatus get status => _statusOf(session.state);
 
@@ -435,23 +431,37 @@ class Device {
     throw EdelkroneError(
       'needs_focus_setup',
       '${session.device.displayName} reports a focus motor. The SDK refuses $command until the lens '
-      'has been learned, because a stored pose on this head includes the focus position and would '
-      'otherwise put the ring somewhere unintended. This app does not drive focus: learn the lens in '
-      'the edelkrone app, or disconnect the focus motor, then connect again.',
+          'has been learned, because a stored pose on this head includes the focus position and would '
+          'otherwise put the ring somewhere unintended. This app does not drive focus: learn the lens in '
+          'the edelkrone app, or disconnect the focus motor, then connect again.',
     );
   }
 
   // -- driving --------------------------------------------------------------------
 
-  Future<void> _drive({double pan = 0, double tilt = 0, double slide = 0, double jibPan = 0, double jibTilt = 0}) async {
+  Future<void> _drive({
+    double pan = 0,
+    double tilt = 0,
+    double slide = 0,
+    double jibPan = 0,
+    double jibTilt = 0,
+  }) async {
     session.assertOpen();
     if (!capabilities.contains(Capability.manualDrive)) {
       throw SessionError(SessionFailure.unsupported, '${session.device.displayName} does not support drive');
     }
-    for (final (name, v) in [('pan', pan), ('tilt', tilt), ('slide', slide), ('jib_pan', jibPan), ('jib_tilt', jibTilt)]) {
+    for (final (name, v) in [
+      ('pan', pan),
+      ('tilt', tilt),
+      ('slide', slide),
+      ('jib_pan', jibPan),
+      ('jib_tilt', jibTilt),
+    ]) {
       if (!v.isFinite) {
-        throw EdelkroneError('bad_argument',
-            '$name must be a finite number, got $v. A non-finite value would drive the axis at full speed');
+        throw EdelkroneError(
+          'bad_argument',
+          '$name must be a finite number, got $v. A non-finite value would drive the axis at full speed',
+        );
       }
     }
     final can = drivable();
@@ -463,14 +473,21 @@ class Device {
     jibTilt = keep(RigAxis.jibTilt, jibTilt);
 
     final groups = {'pan_tilt': pan != 0 || tilt != 0, 'slide': slide != 0, 'jib': jibPan != 0 || jibTilt != 0};
-    final held = {for (final e in groups.entries) if (e.value) e.key};
+    final held = {
+      for (final e in groups.entries)
+        if (e.value) e.key,
+    };
     final released = _held.difference(held);
     _held = held;
 
     if (held.isEmpty) {
       if (!session.isConnected) {
         session.setManualControlActive(false);
-        throw SessionError(SessionFailure.notConnected, '${session.device.displayName} is not connected', command: 'drive');
+        throw SessionError(
+          SessionFailure.notConnected,
+          '${session.device.displayName} is not connected',
+          command: 'drive',
+        );
       }
       if (released.isNotEmpty) {
         await _letGo(released);
@@ -498,7 +515,9 @@ class Device {
         case 'slide':
           await session.sendDrive(c.manualSlide(0), first: first);
         case 'jib':
-          if (session.family == DeviceFamily.headModule) await session.sendDrive(c.manualJibPanTilt(0, 0), first: first);
+          if (session.family == DeviceFamily.headModule) {
+            await session.sendDrive(c.manualJibPanTilt(0, 0), first: first);
+          }
       }
     } on SessionError {
       // A zero that does not get through is followed by the abort.
@@ -645,9 +664,9 @@ bool _allWithin(RigPose a, RigPose b, double limit) {
 }
 
 List<String> _lostAxes(RigPose before, RigPose landed) => [
-      for (final a in RigAxis.values)
-        if (before[a] != null && landed[a] == null) a.name,
-    ];
+  for (final a in RigAxis.values)
+    if (before[a] != null && landed[a] == null) a.name,
+];
 
 /// Stored poses, reached as `device.poses`. A pose is every axis of the
 /// layout, stored in a numbered slot ON THE DEVICE; in a layout the leader
@@ -745,7 +764,10 @@ class PoseController {
     for (final (a, b) in legs) {
       final lo = math.min(a, b);
       final hi = math.max(a, b);
-      final empty = [for (var i = lo + 1; i < hi; i++) if (!have.contains(i)) i];
+      final empty = [
+        for (var i = lo + 1; i < hi; i++)
+          if (!have.contains(i)) i,
+      ];
       if (empty.isNotEmpty) {
         final plural = empty.length > 1;
         return 'slot${plural ? 's' : ''} ${empty.join(', ')} between pose $a and pose $b '
@@ -764,7 +786,22 @@ class PoseController {
     final have = stored.toSet();
     if (origin == null || !have.contains(origin) || origin == slot) return [];
     final step = slot > origin ? 1 : -1;
-    return [for (var i = origin + step; i != slot; i += step) if (have.contains(i)) i];
+    return [
+      for (var i = origin + step; i != slot; i += step)
+        if (have.contains(i)) i,
+    ];
+  }
+
+  /// Where the pose in [slot] is, read back from the device, limited to the
+  /// layout's axes. Null for an empty slot or a read that went unanswered.
+  ///
+  /// An addition to the SDK's public surface, for display: the SDK makes the
+  /// same read privately to verify a move. It only reads; it moves nothing.
+  Future<RigPose?> readPose(int slot) async {
+    _checkSlot('poses.read', slot);
+    if (!stored.contains(slot)) return null;
+    final p = await _poseInSlot(slot);
+    return p?.only(_d.drivable());
   }
 
   Future<RigPose?> _poseInSlot(int slot) async {
@@ -825,8 +862,10 @@ class PoseController {
     _checkSlot('poses.move_to', slot);
     if (start != null) _checkSlot('poses.move_to', start, name: 'start');
     if (style.loop) {
-      throw EdelkroneError('bad_argument',
-          'a loop does not finish, so move_to() cannot wait for it. Start it with startMoveTo and end it with move.stop()');
+      throw EdelkroneError(
+        'bad_argument',
+        'a loop does not finish, so move_to() cannot wait for it. Start it with startMoveTo and end it with move.stop()',
+      );
     }
     final request = style.request(slot, start: start);
     final started = _s.clock.now();
@@ -846,7 +885,12 @@ class PoseController {
     final done = await _s.waitUntilIdle(timeout: timeout);
     final elapsed = _s.clock.now() - started;
     if (!done) {
-      return MoveOutcome(accepted: true, completed: false, duration: elapsed, reason: 'still moving after ${timeout.toInt()} s');
+      return MoveOutcome(
+        accepted: true,
+        completed: false,
+        duration: elapsed,
+        reason: 'still moving after ${timeout.toInt()} s',
+      );
     }
     if (wanted == null) return MoveOutcome(accepted: true, completed: true, duration: elapsed);
     var landed = await _livePose();
@@ -858,7 +902,8 @@ class PoseController {
         accepted: true,
         completed: false,
         duration: elapsed,
-        reason: 'the ${lost.join(', ')} axis left the layout during the move: before $before, after $landed. '
+        reason:
+            'the ${lost.join(', ')} axis left the layout during the move: before $before, after $landed. '
             'The module carrying it is no longer responding, so that axis was not moved to the pose.',
       );
     }
@@ -877,23 +922,25 @@ class PoseController {
         accepted: true,
         completed: false,
         duration: elapsed,
-        reason: 'the equipment did not move: it was ${missed.error.toStringAsFixed(2)} ${_unit(missed.axis)} from the '
+        reason:
+            'the equipment did not move: it was ${missed.error.toStringAsFixed(2)} ${_unit(missed.axis)} from the '
             'pose on the ${missed.axis.name} axis and the device did not start the planned move. $shortMove',
       );
     }
     final busyNote = wasBusy
         ? ' When the move was sent, the device was already reporting motion, and a device in motion does not '
-            'start a planned move. Call move.stop() first.'
+              'start a planned move. Call move.stop() first.'
         : '';
     final viaNote = via.isEmpty
         ? ''
         : ' The head passed through the pose${via.length > 1 ? 's' : ''} in slot${via.length > 1 ? 's' : ''} '
-            '${via.join(', ')} on the way; it stops at two consecutive poses stored in the same place.';
+              '${via.join(', ')} on the way; it stops at two consecutive poses stored in the same place.';
     return MoveOutcome(
       accepted: true,
       completed: false,
       duration: elapsed,
-      reason: 'the device reported idle but the equipment is off by ${missed.error.toStringAsFixed(2)} '
+      reason:
+          'the device reported idle but the equipment is off by ${missed.error.toStringAsFixed(2)} '
           '${_unit(missed.axis)} on the ${missed.axis.name} axis: pose $wanted, position $landed. '
           '${before != null ? 'The equipment moved but stopped short of the pose: the move was stopped, for example by move.stop(), or did not finish.' : 'The move may not have started.'}'
           '$busyNote$viaNote',

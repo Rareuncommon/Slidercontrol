@@ -71,10 +71,10 @@ abstract class FamilyCodec {
   ParseOutcome apply(ResponseFrame frame, DeviceState state, ParseContext ctx);
 
   static FamilyCodec forFamily(DeviceFamily family) => switch (family) {
-        DeviceFamily.headModule => HeadModuleCodec(),
-        DeviceFamily.slideModule => SlideModuleCodec(),
-        _ => throw SessionError(SessionFailure.unsupported, 'no codec for ${family.name}'),
-      };
+    DeviceFamily.headModule => HeadModuleCodec(),
+    DeviceFamily.slideModule => SlideModuleCodec(),
+    _ => throw SessionError(SessionFailure.unsupported, 'no codec for ${family.name}'),
+  };
 }
 
 class HeadModuleCodec implements FamilyCodec {
@@ -238,6 +238,9 @@ abstract final class MocoCodec {
 }
 
 void logUnrecognised(ResponseFrame frame, DeviceFamily family) {
-  EdelkroneLog.warning(() => '${family.name} device: unrecognised ${frame.channel.name} '
-      'frame: type=${frame.type}, ${frame.data.length} bytes; ignored rather than guessed');
+  EdelkroneLog.warning(
+    () =>
+        '${family.name} device: unrecognised ${frame.channel.name} '
+        'frame: type=${frame.type}, ${frame.data.length} bytes; ignored rather than guessed',
+  );
 }

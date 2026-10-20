@@ -86,7 +86,10 @@ class FlutterBlueTransport implements Transport {
       case BluetoothAdapterState.on:
         return;
       case BluetoothAdapterState.unauthorized:
-        throw TransportError(TransportFailure.permissionDenied, 'Bluetooth permission has not been granted to this app.');
+        throw TransportError(
+          TransportFailure.permissionDenied,
+          'Bluetooth permission has not been granted to this app.',
+        );
       case BluetoothAdapterState.unavailable:
         throw TransportError(TransportFailure.adapterUnavailable, 'This device has no Bluetooth adapter.');
       default:
@@ -152,14 +155,16 @@ class _Link implements DeviceLink {
   Stream<List<int>> notifications(Channel channel) => _rx[channel]!.stream;
 
   Future<void> open() async {
-    _subs.add(_peripheral.connectionState.listen((s) {
-      // The initial value pushed to a new listener is not news.
-      if (!_established) return;
-      final up = s == BluetoothConnectionState.connected;
-      if (up == _up) return;
-      _up = up;
-      if (!_changes.isClosed) _changes.add(up);
-    }));
+    _subs.add(
+      _peripheral.connectionState.listen((s) {
+        // The initial value pushed to a new listener is not news.
+        if (!_established) return;
+        final up = s == BluetoothConnectionState.connected;
+        if (up == _up) return;
+        _up = up;
+        if (!_changes.isClosed) _changes.add(up);
+      }),
+    );
     try {
       // License.nonprofit per the flutter_blue_plus licence terms: personal
       // and nonprofit use. Commercial distribution needs License.commercial.
@@ -188,7 +193,10 @@ class _Link implements DeviceLink {
           }
         }
       }
-      final missing = [for (final e in wanted.entries) if (!found.containsKey(e.key)) '${e.key.$1.name}/${e.key.$2 ? 'write' : 'read'}(${e.value})'];
+      final missing = [
+        for (final e in wanted.entries)
+          if (!found.containsKey(e.key)) '${e.key.$1.name}/${e.key.$2 ? 'write' : 'read'}(${e.value})',
+      ];
       if (missing.isNotEmpty) {
         throw TransportError(
           TransportFailure.characteristicNotFound,
@@ -199,10 +207,12 @@ class _Link implements DeviceLink {
         _writers[ch] = found[(ch, true)]!;
         final reader = found[(ch, false)]!;
         await reader.setNotifyValue(true);
-        _subs.add(reader.onValueReceived.listen((v) {
-          final c = _rx[ch]!;
-          if (!c.isClosed) c.add(List<int>.of(v));
-        }));
+        _subs.add(
+          reader.onValueReceived.listen((v) {
+            final c = _rx[ch]!;
+            if (!c.isClosed) c.add(List<int>.of(v));
+          }),
+        );
       }
     } catch (e) {
       await disconnect();

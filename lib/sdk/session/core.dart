@@ -70,13 +70,8 @@ class EdelkroneCommand {
 
   final int bufferSize;
 
-  EdelkroneCommand withExpects(int? type) => EdelkroneCommand(
-        name: name,
-        channel: channel,
-        build: build,
-        expects: type,
-        bufferSize: bufferSize,
-      );
+  EdelkroneCommand withExpects(int? type) =>
+      EdelkroneCommand(name: name, channel: channel, build: build, expects: type, bufferSize: bufferSize);
 
   /// The bytes on the wire: `ptr[0]` is the frame length excluding the
   /// two-byte checksum the builder appended after it (§2 of your spec, and
@@ -97,8 +92,11 @@ class EdelkroneCommand {
     }
     final packet = [for (var i = 0; i < total; i++) ptr[i] & 0xFF];
     if (EdelkroneMoco.checksumControl(packet, packet.length) != 0) {
-      EdelkroneLog.warning(() => '$name builds a packet whose checksum does not '
-          'verify; sending it anyway (a known pinned-library defect)');
+      EdelkroneLog.warning(
+        () =>
+            '$name builds a packet whose checksum does not '
+            'verify; sending it anyway (a known pinned-library defect)',
+      );
     }
     return packet;
   }
@@ -117,12 +115,10 @@ class ResponseFrame {
 
   int? get type => data.isEmpty ? null : data[0];
 
-  bool get checksumOk =>
-      data.isNotEmpty && EdelkroneMoco.checksumControl(List<int>.of(data), data.length) == 0;
+  bool get checksumOk => data.isNotEmpty && EdelkroneMoco.checksumControl(List<int>.of(data), data.length) == 0;
 
   @override
-  String toString() =>
-      '${channel.name} type=${type ?? '-'} ${data.length}B ${checksumOk ? 'ok' : 'BAD CHECKSUM'}';
+  String toString() => '${channel.name} type=${type ?? '-'} ${data.length}B ${checksumOk ? 'ok' : 'BAD CHECKSUM'}';
 }
 
 enum DeviceFamily { headModule, slideModule, dolly, jib, focusPlus, tripod }
@@ -180,15 +176,14 @@ class DeviceLibraries {
 
   /// Heads and sliders take the universal moco commands on the data channel;
   /// everything else on io-control.
-  bool get mocoUniversalOnDataChannel =>
-      family == DeviceFamily.headModule || family == DeviceFamily.slideModule;
+  bool get mocoUniversalOnDataChannel => family == DeviceFamily.headModule || family == DeviceFamily.slideModule;
 
   bool get isPro => _proTypes.contains(model.deviceType);
 
   SessionError _wrong(String wanted) => SessionError(
-        SessionFailure.unsupported,
-        '${model.displayName} is a ${family.name} device; this command wants $wanted',
-      );
+    SessionFailure.unsupported,
+    '${model.displayName} is a ${family.name} device; this command wants $wanted',
+  );
 }
 
 /// Timeouts and polling intervals, in seconds, with the SDK's defaults.

@@ -133,15 +133,18 @@ void main() {
         failures.add('#$i $key: Dart threw $thrown, Python did not');
         continue;
       }
-      final mismatch = diff(out['ret'], ser(ret), 'ret') ??
-          diff(out['args'], ser(args), 'args');
+      final mismatch = diff(out['ret'], ser(ret), 'ret') ?? diff(out['args'], ser(args), 'args');
       if (mismatch != null) {
         failures.add('#$i $key: $mismatch');
       } else {
         agreed++;
       }
     }
-    expect(failures, isEmpty, reason: '${failures.length} of ${cases.length} disagree; first: ${failures.take(8).join('\n')}');
+    expect(
+      failures,
+      isEmpty,
+      reason: '${failures.length} of ${cases.length} disagree; first: ${failures.take(8).join('\n')}',
+    );
     expect(agreed, greaterThan(5000));
   });
 }

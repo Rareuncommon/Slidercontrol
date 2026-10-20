@@ -49,15 +49,14 @@ class RigPose {
     double? focusCm,
     double? jibPanDeg,
     double? jibTiltDeg,
-  }) =>
-      RigPose(
-        panDeg: _fitted(panDeg),
-        tiltDeg: _fitted(tiltDeg),
-        slideCm: _fitted(slideCm),
-        focusCm: _fitted(focusCm),
-        jibPanDeg: _fitted(jibPanDeg),
-        jibTiltDeg: _fitted(jibTiltDeg),
-      );
+  }) => RigPose(
+    panDeg: _fitted(panDeg),
+    tiltDeg: _fitted(tiltDeg),
+    slideCm: _fitted(slideCm),
+    focusCm: _fitted(focusCm),
+    jibPanDeg: _fitted(jibPanDeg),
+    jibTiltDeg: _fitted(jibTiltDeg),
+  );
 
   static const unknown = RigPose();
 
@@ -69,30 +68,36 @@ class RigPose {
   final double? jibTiltDeg;
 
   double? operator [](RigAxis a) => switch (a) {
-        RigAxis.pan => panDeg,
-        RigAxis.tilt => tiltDeg,
-        RigAxis.slide => slideCm,
-        RigAxis.focus => focusCm,
-        RigAxis.jibPan => jibPanDeg,
-        RigAxis.jibTilt => jibTiltDeg,
-      };
+    RigAxis.pan => panDeg,
+    RigAxis.tilt => tiltDeg,
+    RigAxis.slide => slideCm,
+    RigAxis.focus => focusCm,
+    RigAxis.jibPan => jibPanDeg,
+    RigAxis.jibTilt => jibTiltDeg,
+  };
 
-  Set<RigAxis> get presentAxes => {for (final a in RigAxis.values) if (this[a] != null) a};
+  Set<RigAxis> get presentAxes => {
+    for (final a in RigAxis.values)
+      if (this[a] != null) a,
+  };
   bool get isEmpty => presentAxes.isEmpty;
 
   /// This pose with every axis outside [keep] blanked.
   RigPose only(Set<RigAxis> keep) => RigPose(
-        panDeg: keep.contains(RigAxis.pan) ? panDeg : null,
-        tiltDeg: keep.contains(RigAxis.tilt) ? tiltDeg : null,
-        slideCm: keep.contains(RigAxis.slide) ? slideCm : null,
-        focusCm: keep.contains(RigAxis.focus) ? focusCm : null,
-        jibPanDeg: keep.contains(RigAxis.jibPan) ? jibPanDeg : null,
-        jibTiltDeg: keep.contains(RigAxis.jibTilt) ? jibTiltDeg : null,
-      );
+    panDeg: keep.contains(RigAxis.pan) ? panDeg : null,
+    tiltDeg: keep.contains(RigAxis.tilt) ? tiltDeg : null,
+    slideCm: keep.contains(RigAxis.slide) ? slideCm : null,
+    focusCm: keep.contains(RigAxis.focus) ? focusCm : null,
+    jibPanDeg: keep.contains(RigAxis.jibPan) ? jibPanDeg : null,
+    jibTiltDeg: keep.contains(RigAxis.jibTilt) ? jibTiltDeg : null,
+  );
 
   @override
   String toString() {
-    final parts = [for (final a in RigAxis.values) if (this[a] != null) '${a.label} ${a.format(this[a]!)}'];
+    final parts = [
+      for (final a in RigAxis.values)
+        if (this[a] != null) '${a.label} ${a.format(this[a]!)}',
+    ];
     return parts.isEmpty ? 'RigPose(unknown)' : 'RigPose(${parts.join(', ')})';
   }
 }
@@ -116,10 +121,10 @@ bool? headHasJib(LibHeadModuleMk2Status? status) {
 }
 
 AbsoluteReading? absoluteReadingOf(DeviceState state) => switch (state.family) {
-      DeviceFamily.headModule => _headReading(state as HeadModuleState),
-      DeviceFamily.slideModule => _slideReading(state as SlideModuleState),
-      _ => null,
-    };
+  DeviceFamily.headModule => _headReading(state as HeadModuleState),
+  DeviceFamily.slideModule => _slideReading(state as SlideModuleState),
+  _ => null,
+};
 
 AbsoluteReading? _headReading(HeadModuleState state) {
   final numeric = state.numericReadout;

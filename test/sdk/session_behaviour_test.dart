@@ -168,7 +168,10 @@ void main() {
       await jog(d, pan: 0.6, ticks: 3);
       final mark = link.sent.length;
       await d.move.stop();
-      final after = link.sent.sublist(mark).where((s) => s.channel == Channel.data && s.op != opStatus && s.op != 83).toList();
+      final after = link.sent
+          .sublist(mark)
+          .where((s) => s.channel == Channel.data && s.op != opStatus && s.op != 83)
+          .toList();
       expect(after.first.op, opPanTilt, reason: 'the held pan/tilt goes to zero first');
       expect(s16(after.first.bytes, 2), 0);
       expect(after[1].op, opAbort, reason: 'then the planned move is aborted');
@@ -188,15 +191,23 @@ void main() {
     test('a stop overtakes the queue of status polls', () async {
       final (d, link) = await joinedRig();
       link.silent = true; // replies stop, so commands back up behind one another
-      final polls = [for (var i = 0; i < 4; i++) d.session.send(d.session.commands.statusGet(), timeout: 0.4).catchError((_) => null)];
+      final polls = [
+        for (var i = 0; i < 4; i++)
+          d.session.send(d.session.commands.statusGet(), timeout: 0.4).catchError((_) => null),
+      ];
       await Future<void>.delayed(const Duration(milliseconds: 20));
       final mark = link.sent.length;
       final stopping = d.session.motionAbort();
       await Future.wait(polls);
       await stopping.catchError((_) {});
       final ops = link.sent.sublist(mark).map((s) => s.op).toList();
-      expect(ops.indexOf(opAbort), lessThan(ops.indexOf(opStatus) < 0 ? 999 : ops.indexOf(opStatus)),
-          reason: 'the abort goes out before the polls that were already waiting');
+      expect(ops, contains(opAbort));
+      expect(ops, contains(opStatus), reason: 'the queued polls did go out, afterwards');
+      expect(
+        ops.indexOf(opAbort),
+        lessThan(ops.indexOf(opStatus)),
+        reason: 'the abort goes out before the polls that were already waiting',
+      );
       await d.disconnect();
     });
   });

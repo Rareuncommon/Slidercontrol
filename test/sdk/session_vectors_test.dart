@@ -107,14 +107,16 @@ EdelkroneCommand commandOf(CommandSet cs, String fam, String name, List<dynamic>
       return cs.configuration(EdlSetup.values.byName(a[0] as String));
     case 'keypose_move':
       final accel = num_(a[4])!;
-      return cs.keyposeMove(MoveRequest(
-        aimIndex: a[0] as int,
-        startIndex: a[1] as int,
-        loop: a[2] as bool,
-        relativeSpeed: num_(a[3])!,
-        accelInRatio: accel,
-        accelOutRatio: accel,
-      ));
+      return cs.keyposeMove(
+        MoveRequest(
+          aimIndex: a[0] as int,
+          startIndex: a[1] as int,
+          loop: a[2] as bool,
+          relativeSpeed: num_(a[3])!,
+          accelInRatio: accel,
+          accelOutRatio: accel,
+        ),
+      );
     case 'ioctl_status_get':
       return cs.ioctlStatusGet();
     case 'canbus_info_get':
@@ -134,8 +136,9 @@ EdelkroneCommand commandOf(CommandSet cs, String fam, String name, List<dynamic>
 }
 
 void main() {
-  final data = jsonDecode(utf8.decode(gzip.decode(File('test/sdk/vectors/session_vectors.json.gz').readAsBytesSync())))
-      as Map<String, dynamic>;
+  final data = jsonDecode(
+    utf8.decode(gzip.decode(File('test/sdk/vectors/session_vectors.json.gz').readAsBytesSync())),
+  ) as Map<String, dynamic>;
 
   group('commands', () {
     final cases = (data['commands'] as List).cast<Map<String, dynamic>>();
@@ -148,7 +151,9 @@ void main() {
         final bytes = cmd.encode();
         final want = (c['bytes'] as List).cast<int>();
         if (bytes.toString() != want.toString()) failures.add('$fam ${c['cmd']}${c['args']}: bytes $bytes != $want');
-        if (cmd.channel.name != c['channel']) failures.add('$fam ${c['cmd']}: channel ${cmd.channel.name} != ${c['channel']}');
+        if (cmd.channel.name != c['channel']) {
+          failures.add('$fam ${c['cmd']}: channel ${cmd.channel.name} != ${c['channel']}');
+        }
         if (cmd.expects != c['expects']) failures.add('$fam ${c['cmd']}: expects ${cmd.expects} != ${c['expects']}');
       }
       expect(failures, isEmpty, reason: failures.take(10).join('\n'));
@@ -246,7 +251,12 @@ void main() {
           if (!ok) failures.add('#${cases.indexOf(c)} $fam $what: got $got, want $exp');
         }
 
-        const activity = {'idle': 'idle', 'moving': 'moving', 'transitioning': 'transitioning', 'tracking_target': 'trackingTarget'};
+        const activity = {
+          'idle': 'idle',
+          'moving': 'moving',
+          'transitioning': 'transitioning',
+          'tracking_target': 'trackingTarget',
+        };
         check('activity', st.activity?.name == activity[want['activity']], st.activity, want['activity']);
         final pose = want['pose'] as Map<String, dynamic>;
         check('pan', sameNum(pose['pan_deg'], st.pose.panDeg), st.pose.panDeg, pose['pan_deg']);
@@ -255,23 +265,49 @@ void main() {
         check('focus', sameNum(pose['focus_cm'], st.pose.focusCm), st.pose.focusCm, pose['focus_cm']);
         check('jibPan', sameNum(pose['jib_pan_deg'], st.pose.jibPanDeg), st.pose.jibPanDeg, pose['jib_pan_deg']);
         check('jibTilt', sameNum(pose['jib_tilt_deg'], st.pose.jibTiltDeg), st.pose.jibTiltDeg, pose['jib_tilt_deg']);
-        check('slideFraction', sameNum(want['slide_fraction'], st.slideFraction), st.slideFraction, want['slide_fraction']);
-        check('battery', sameNum(want['battery_percent'], st.batteryPercent), st.batteryPercent, want['battery_percent']);
+        check(
+          'slideFraction',
+          sameNum(want['slide_fraction'], st.slideFraction),
+          st.slideFraction,
+          want['slide_fraction'],
+        );
+        check(
+          'battery',
+          sameNum(want['battery_percent'], st.batteryPercent),
+          st.batteryPercent,
+          want['battery_percent'],
+        );
         check('calibrated', st.isCalibrated == want['is_calibrated'], st.isCalibrated, want['is_calibrated']);
         check('focusMotor', st.hasFocusMotor == want['has_focus_motor'], st.hasFocusMotor, want['has_focus_motor']);
         check('layout', st.layout?.name.toLowerCase() == want['layout'], st.layout, want['layout']);
-        check('slots', jsonEncode(st.storedPoseSlots) == jsonEncode(want['stored_pose_slots']), st.storedPoseSlots,
-            want['stored_pose_slots']);
-        check('responding', st.modulesResponding == want['modules_responding'], st.modulesResponding,
-            want['modules_responding']);
+        check(
+          'slots',
+          jsonEncode(st.storedPoseSlots) == jsonEncode(want['stored_pose_slots']),
+          st.storedPoseSlots,
+          want['stored_pose_slots'],
+        );
+        check(
+          'responding',
+          st.modulesResponding == want['modules_responding'],
+          st.modulesResponding,
+          want['modules_responding'],
+        );
         check('progress', sameNum(want['move_progress'], st.moveProgress), st.moveProgress, want['move_progress']);
-        check('trusted', st.positionIsTrusted == want['position_is_trusted'], st.positionIsTrusted,
-            want['position_is_trusted']);
+        check(
+          'trusted',
+          st.positionIsTrusted == want['position_is_trusted'],
+          st.positionIsTrusted,
+          want['position_is_trusted'],
+        );
         check('frame', st.hasStatusFrame == want['has_status_frame'], st.hasStatusFrame, want['has_status_frame']);
         check('tiltDeg', sameNum(want['tilt_deg'], st.tiltDeg), st.tiltDeg, want['tilt_deg']);
         check('level', st.isLevel == want['is_level'], st.isLevel, want['is_level']);
-        check('orientation', st.orientationWarning == want['orientation_warning'], st.orientationWarning,
-            want['orientation_warning']);
+        check(
+          'orientation',
+          st.orientationWarning == want['orientation_warning'],
+          st.orientationWarning,
+          want['orientation_warning'],
+        );
         final acc = want['accel'] as List;
         final a = st.accel;
         check('accel', sameNum(acc[0], a?.$1) && sameNum(acc[1], a?.$2) && sameNum(acc[2], a?.$3), a, acc);

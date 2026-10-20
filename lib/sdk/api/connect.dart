@@ -52,7 +52,8 @@ class Seen {
   final Rig rig;
 
   @override
-  String toString() => '$name $mac ($signal dBm) · ${layout?.name.toLowerCase() ?? 'none'}'
+  String toString() =>
+      '$name $mac ($signal dBm) · ${layout?.name.toLowerCase() ?? 'none'}'
       '${modules.isEmpty ? '' : ' + ${modules.join(', ')}'}';
 }
 
@@ -66,7 +67,9 @@ Seen seenOf(Rig rig) {
     layout: m.advData.setup,
     modules: [for (final s in rig.orderedSlaves) s.displayName],
     recognised: rig.isRecognised && family != DeviceFamily.focusPlus && m.advData.setup != EdlSetup.FIRMWARE_ERROR,
-    drivable: DeviceLibraries.isDrivable(m.model) && rig.orderedSlaves.every((s) => DeviceLibraries.familyOf(s.model) != null),
+    drivable:
+        DeviceLibraries.isDrivable(m.model) &&
+        rig.orderedSlaves.every((s) => DeviceLibraries.familyOf(s.model) != null),
     rig: rig,
   );
 }
@@ -118,7 +121,7 @@ Future<Device> connect(
     throw EdelkroneError(
       'wrong_device',
       '${rig.master.displayName} (${rig.master.mac}) reports a firmware error: its main firmware is not '
-      'running. Update its firmware with the edelkrone application, then switch it off and on.',
+          'running. Update its firmware with the edelkrone application, then switch it off and on.',
     );
   }
   if (!DeviceLibraries.isDrivable(rig.master.model)) {
@@ -132,7 +135,7 @@ Future<Device> connect(
       throw EdelkroneError(
         'unsupported',
         "the SDK's registry lists no layout for ${[rig.master, ...withModules].map((u) => u.displayName).join(' + ')}; "
-        'these parts cannot be joined',
+            'these parts cannot be joined',
       );
     }
     target = built;
@@ -145,7 +148,7 @@ Future<Device> connect(
     throw EdelkroneError(
       'timed_out',
       '${target.master.displayName} (${target.master.mac}) was found but did not accept the connection: '
-      '${e.message}. It may be connected to the edelkrone app on a phone; close that connection and try again.',
+          '${e.message}. It may be connected to the edelkrone app on a phone; close that connection and try again.',
       cause: e,
     );
   }
@@ -163,8 +166,8 @@ Future<Device> connect(
       throw EdelkroneError(
         'layout_refused',
         '${session.device.displayName} is already driving ${current.name.toLowerCase()} and a connected unit '
-        'cannot be re-formed. A unit keeps the layout its modules form while they are switched on: switch '
-        'the units off and on so that every part advertises on its own, then join them again.',
+            'cannot be re-formed. A unit keeps the layout its modules form while they are switched on: switch '
+            'the units off and on so that every part advertises on its own, then join them again.',
       );
     }
     _checkTheLayout(device, session, target, asked: withModules.isNotEmpty);
@@ -184,18 +187,18 @@ Future<Device> connect(
 Set<String> _layoutModuleBodies(EdlSetup? layout) => layout == null
     ? {}
     : layout.name
-        .replaceAll('_PLUS', 'PLUS')
-        .split('_')
-        .where((t) => !const {'AND', 'ONLY', 'PAN', 'TILT'}.contains(t))
-        .map((t) => t.replaceAll('SLIDER', 'SLIDE'))
-        .toSet();
+          .replaceAll('_PLUS', 'PLUS')
+          .split('_')
+          .where((t) => !const {'AND', 'ONLY', 'PAN', 'TILT'}.contains(t))
+          .map((t) => t.replaceAll('SLIDER', 'SLIDE'))
+          .toSet();
 
 String? _moduleBody(EdelkroneDevice unit) => switch (DeviceLibraries.familyOf(unit.model)) {
-      DeviceFamily.slideModule => 'SLIDE',
-      DeviceFamily.dolly => 'DOLLY',
-      DeviceFamily.jib => 'JIB',
-      _ => null,
-    };
+  DeviceFamily.slideModule => 'SLIDE',
+  DeviceFamily.dolly => 'DOLLY',
+  DeviceFamily.jib => 'JIB',
+  _ => null,
+};
 
 bool _layoutHolds(EdlSetup? layout, EdelkroneDevice unit) {
   final body = _moduleBody(unit);
@@ -211,9 +214,9 @@ void _checkTheLayout(Device device, EdelkroneSession session, Rig rig, {required
     throw EdelkroneError(
       'layout_refused',
       '${session.device.displayName} reports the ${reported?.name.toLowerCase() ?? 'none'} layout: '
-      '${leftOut.map((u) => u.displayName).join(' + ')} was not joined. A module that already belongs to another '
-      'layout does not join a new one: power the units off and on so that every part advertises on its own, '
-      'then join them again.',
+          '${leftOut.map((u) => u.displayName).join(' + ')} was not joined. A module that already belongs to another '
+          'layout does not join a new one: power the units off and on so that every part advertises on its own, '
+          'then join them again.',
     );
   }
   device.setModules(held);
@@ -221,13 +224,17 @@ void _checkTheLayout(Device device, EdelkroneSession session, Rig rig, {required
 
 Future<void> _waitForTheModules(Device device, EdelkroneSession session, {required bool joined}) async {
   if (device.status.modulesResponding != false) return;
-  final ready = await session.waitForState((_) => device.status.modulesResponding != false, timeout: _modulesReady, interval: 0.3);
+  final ready = await session.waitForState(
+    (_) => device.status.modulesResponding != false,
+    timeout: _modulesReady,
+    interval: 0.3,
+  );
   if (ready && device.status.modulesResponding == null) {
     throw EdelkroneError(
       'layout_refused',
       "${session.device.displayName}'s layout dissolved while connecting: its modules did not answer. A module "
-      'that still belongs to an earlier layout does not join a new one: switch all the units off and on, then '
-      'connect again.',
+          'that still belongs to an earlier layout does not join a new one: switch all the units off and on, then '
+          'connect again.',
     );
   }
   if (!ready) {
@@ -235,11 +242,14 @@ Future<void> _waitForTheModules(Device device, EdelkroneSession session, {requir
       throw EdelkroneError(
         'layout_refused',
         '${session.device.displayName} took the layout but its modules did not answer within '
-        '${_modulesReady.toInt()} s, so the layout will dissolve. Switch the modules off and on, then connect again.',
+            '${_modulesReady.toInt()} s, so the layout will dissolve. Switch the modules off and on, then connect again.',
       );
     }
-    EdelkroneLog.warning(() => '${session.device.displayName}: the modules did not report answering within '
-        '${_modulesReady.toInt()} s; their axes may be missing from status.pose');
+    EdelkroneLog.warning(
+      () =>
+          '${session.device.displayName}: the modules did not report answering within '
+          '${_modulesReady.toInt()} s; their axes may be missing from status.pose',
+    );
     return;
   }
   try {

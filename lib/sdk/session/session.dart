@@ -91,7 +91,8 @@ class RigSetupResult {
   final EdlSetup? reportedSetup;
 
   @override
-  String toString() => 'RigSetup(${route.name}, ${setup.name}, group 0x${groupId.toRadixString(16)}'
+  String toString() =>
+      'RigSetup(${route.name}, ${setup.name}, group 0x${groupId.toRadixString(16)}'
       '${route == RigSetupRoute.wireless ? ', $peersAdded peers' : ''})';
 }
 
@@ -117,11 +118,11 @@ class EdelkroneSession {
     required DeviceLink link,
     required this.libs,
     required SessionClock clock,
-  })  : commands = CommandSet(libs),
-        _link = link,
-        _codec = FamilyCodec.forFamily(libs.family),
-        _clock = clock,
-        state = DeviceState.forFamily(libs) {
+  }) : commands = CommandSet(libs),
+       _link = link,
+       _codec = FamilyCodec.forFamily(libs.family),
+       _clock = clock,
+       state = DeviceState.forFamily(libs) {
     _roundTrips = RoundTripMonitor(config);
   }
 
@@ -172,7 +173,9 @@ class EdelkroneSession {
         break;
       } catch (e) {
         lastError = e;
-        EdelkroneLog.warning(() => '${device.displayName}: connection attempt $attempt/${config.connectAttempts} failed: $e');
+        EdelkroneLog.warning(
+          () => '${device.displayName}: connection attempt $attempt/${config.connectAttempts} failed: $e',
+        );
         if (attempt < config.connectAttempts) await clock.sleep(config.connectBackoff);
       }
     }
@@ -471,8 +474,11 @@ class EdelkroneSession {
       if (e.failure != SessionFailure.timeout || e.cause != null) rethrow;
       _driveMisses++;
       if (!_driveAnswersExpected) {
-        EdelkroneLog.info(() => '$_driveMisses drive packets in a row went unanswered; '
-            'they are sent without waiting from now on');
+        EdelkroneLog.info(
+          () =>
+              '$_driveMisses drive packets in a row went unanswered; '
+              'they are sent without waiting from now on',
+        );
       }
       return;
     }
@@ -620,7 +626,13 @@ class EdelkroneSession {
       var named = 0;
       for (final slave in slaves) {
         if (slave.model.deviceType == EdlDevice.PAN_MODULE_FOR_JIB_ONE) continue;
-        await send(commands.addPeer(mac: List<int>.of(slave.advData.mac), deviceType: slave.model.deviceType, groupId: peerGroup));
+        await send(
+          commands.addPeer(
+            mac: List<int>.of(slave.advData.mac),
+            deviceType: slave.model.deviceType,
+            groupId: peerGroup,
+          ),
+        );
         named++;
       }
       return named;
@@ -713,7 +725,11 @@ class EdelkroneSession {
   /// Stores the current position in [index] and confirms it from the next
   /// readings; a slot that holds a pose is emptied first, so the confirmation
   /// is of the new one.
-  Future<bool> storePose(int index, {PoseKind kind = PoseKind.keypose, int uniqueId = CommandSet.defaultUniqueId}) async {
+  Future<bool> storePose(
+    int index, {
+    PoseKind kind = PoseKind.keypose,
+    int uniqueId = CommandSet.defaultUniqueId,
+  }) async {
     _assertUsable();
     if (kind != PoseKind.keypose) {
       throw SessionError(SessionFailure.unsupported, 'only keyposes are stored by this port', command: 'storePose');

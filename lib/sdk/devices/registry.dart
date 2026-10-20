@@ -15,13 +15,7 @@ import 'models.dart' as models;
 
 /// A unit seen advertising.
 class EdelkroneDevice {
-  EdelkroneDevice({
-    required this.id,
-    required this.model,
-    required this.advData,
-    required this.rssi,
-    this.setup,
-  });
+  EdelkroneDevice({required this.id, required this.model, required this.advData, required this.rssi, this.setup});
 
   /// The platform's identifier for the peripheral. On Apple platforms this is
   /// a per-host UUID, not the MAC — which is why the MAC comes from the
@@ -64,7 +58,7 @@ String macText(List<int> mac) => mac.map((b) => b.toRadixString(16).padLeft(2, '
 
 class DeviceSetup {
   DeviceSetup({required this.masterDevice, required this.setupType, List<EdelkroneDevice>? slaveDevices})
-      : slaveDevices = slaveDevices ?? [];
+    : slaveDevices = slaveDevices ?? [];
 
   final EdelkroneDevice masterDevice;
   final EdlSetup setupType;
@@ -203,15 +197,15 @@ EdelkroneDevice _pickSlave(
 
 /// The units with a live mode, in which a frame's layout differs.
 bool hasLiveMode(DeviceSetup setup) => const [
-      models.headPlusV3,
-      models.headPlusProV3,
-      models.headOneFm,
-      models.dollyOneV2,
-      models.dollyGo,
-      models.dollyPlusV2,
-      models.sliderPlusV1,
-      models.sliderOneFm,
-    ].any((m) => identical(m, setup.masterDevice.model));
+  models.headPlusV3,
+  models.headPlusProV3,
+  models.headOneFm,
+  models.dollyOneV2,
+  models.dollyGo,
+  models.dollyPlusV2,
+  models.sliderPlusV1,
+  models.sliderOneFm,
+].any((m) => identical(m, setup.masterDevice.model));
 
 /// A unit together with the modules it leads.
 class Rig {

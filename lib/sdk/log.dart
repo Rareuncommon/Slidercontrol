@@ -12,8 +12,7 @@ abstract final class EdelkroneLog {
   static EdelkroneLogSink? sink;
   static EdelkroneLogLevel minimumLevel = EdelkroneLogLevel.info;
 
-  static bool isEnabled(EdelkroneLogLevel level) =>
-      sink != null && level.index >= minimumLevel.index;
+  static bool isEnabled(EdelkroneLogLevel level) => sink != null && level.index >= minimumLevel.index;
 
   static void _emit(EdelkroneLogLevel level, String Function() message) {
     final s = sink;

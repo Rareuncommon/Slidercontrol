@@ -45,10 +45,10 @@ class EkPermissions {
     });
 
     // Scanning genuinely cannot work without these two on Android 12+.
-    final scanBlocked = results[Permission.bluetoothScan]?.isGranted == false &&
+    final scanBlocked =
+        results[Permission.bluetoothScan]?.isGranted == false &&
         results[Permission.locationWhenInUse]?.isGranted == false;
-    final connectBlocked =
-        results[Permission.bluetoothConnect]?.isGranted == false;
+    final connectBlocked = results[Permission.bluetoothConnect]?.isGranted == false;
 
     if (!scanBlocked && !connectBlocked) return null;
 

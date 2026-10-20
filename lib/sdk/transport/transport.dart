@@ -131,8 +131,11 @@ class DeviceBook {
     final model = identifyEdelkroneDevice(advertisedName);
     if (model == null) {
       if (advertisedName.isNotEmpty && looksLikeEdelkrone(serviceData) && _unnamed.add(advertisedName)) {
-        EdelkroneLog.warning(() => 'an advertisement shaped like edelkrone\'s carries the name '
-            '"$advertisedName", which is not in the device table');
+        EdelkroneLog.warning(
+          () =>
+              'an advertisement shaped like edelkrone\'s carries the name '
+              '"$advertisedName", which is not in the device table',
+        );
       }
       return null;
     }

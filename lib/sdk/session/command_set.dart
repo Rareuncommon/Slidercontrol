@@ -47,9 +47,12 @@ const _speedBasedDuration = -1.0;
 double _speed(double value, String name) {
   if (value >= -1.0 && value <= 1.0) return value;
   final held = value > 0 ? 1.0 : -1.0;
-  EdelkroneLog.warning(() => '$name=$value is outside the documented -1..1 and was held '
-      'at $held: on the wire an out-of-range fraction overflows a signed '
-      '16-bit field and drives the motor backwards.');
+  EdelkroneLog.warning(
+    () =>
+        '$name=$value is outside the documented -1..1 and was held '
+        'at $held: on the wire an out-of-range fraction overflows a signed '
+        '16-bit field and drives the motor backwards.',
+  );
   return held;
 }
 
@@ -68,10 +71,10 @@ class CommandSet {
   bool get _isHead => libs.family == DeviceFamily.headModule;
 
   SessionError _unsupported(String command) => SessionError(
-        SessionFailure.unsupported,
-        '$command is not a ${libs.family.name} command (${libs.model.displayName})',
-        command: command,
-      );
+    SessionFailure.unsupported,
+    '$command is not a ${libs.family.name} command (${libs.model.displayName})',
+    command: command,
+  );
 
   EdelkroneCommand statusGet() => _isHead
       ? EdelkroneCommand(
@@ -288,24 +291,21 @@ class CommandSet {
   }
 
   EdelkroneCommand ioctlStatusGet() => EdelkroneCommand(
-        name: 'moco.ioctlStatusGet',
-        channel: Channel.ioCtrl,
-        build: (p, n) => _moco.ioctlStatusGet(p, n),
-        expects: LibEdelkroneMocoResponse.IOCTL_STATUS.value,
-      );
+    name: 'moco.ioctlStatusGet',
+    channel: Channel.ioCtrl,
+    build: (p, n) => _moco.ioctlStatusGet(p, n),
+    expects: LibEdelkroneMocoResponse.IOCTL_STATUS.value,
+  );
 
   EdelkroneCommand canbusInfoGet() => EdelkroneCommand(
-        name: 'moco.canbusInfoGet',
-        channel: _mocoChannel,
-        build: (p, n) => _moco.canbusInfoGet(p, n),
-        expects: LibEdelkroneMocoResponse.CANBUS_INFO_READOUT.value,
-      );
+    name: 'moco.canbusInfoGet',
+    channel: _mocoChannel,
+    build: (p, n) => _moco.canbusInfoGet(p, n),
+    expects: LibEdelkroneMocoResponse.CANBUS_INFO_READOUT.value,
+  );
 
-  EdelkroneCommand canbusAutoPair() => EdelkroneCommand(
-        name: 'moco.canbusAutoPair',
-        channel: _mocoChannel,
-        build: (p, n) => _moco.canbusAutoPair(p, n),
-      );
+  EdelkroneCommand canbusAutoPair() =>
+      EdelkroneCommand(name: 'moco.canbusAutoPair', channel: _mocoChannel, build: (p, n) => _moco.canbusAutoPair(p, n));
 
   /// Invites a module into this unit's group, by radio.
   EdelkroneCommand addPeer({
@@ -313,17 +313,16 @@ class CommandSet {
     required EdlDevice deviceType,
     required int groupId,
     EdlConfig config = EdlConfig.DOESNT_MATTER,
-  }) =>
-      EdelkroneCommand(
-        name: 'moco.addPeer(${deviceType.name} @ 0x${groupId.toRadixString(16).padLeft(4, '0')})',
-        channel: Channel.ioCtrl,
-        bufferSize: 32,
-        build: (p, n) => EdelkroneMoco.addPeer(p, n, mac, deviceType, config, groupId),
-      );
+  }) => EdelkroneCommand(
+    name: 'moco.addPeer(${deviceType.name} @ 0x${groupId.toRadixString(16).padLeft(4, '0')})',
+    channel: Channel.ioCtrl,
+    bufferSize: 32,
+    build: (p, n) => EdelkroneMoco.addPeer(p, n, mac, deviceType, config, groupId),
+  );
 
   EdelkroneCommand groupIdSelfSet(int groupId) => EdelkroneCommand(
-        name: 'moco.groupIdSelfSet(0x${groupId.toRadixString(16)})',
-        channel: Channel.ioCtrl,
-        build: (p, n) => EdelkroneMoco.groupIdSelfSet(p, n, groupId),
-      );
+    name: 'moco.groupIdSelfSet(0x${groupId.toRadixString(16)})',
+    channel: Channel.ioCtrl,
+    build: (p, n) => EdelkroneMoco.groupIdSelfSet(p, n, groupId),
+  );
 }

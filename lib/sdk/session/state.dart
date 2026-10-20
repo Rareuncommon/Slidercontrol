@@ -38,10 +38,10 @@ abstract class DeviceState {
   (double, double, double)? accelerationMs2;
 
   static DeviceState forFamily(DeviceLibraries libs) => switch (libs.family) {
-        DeviceFamily.headModule => HeadModuleState(libs.model),
-        DeviceFamily.slideModule => SlideModuleState(libs.model),
-        _ => throw SessionError(SessionFailure.unsupported, '${libs.model.displayName} is not driven by this port'),
-      };
+    DeviceFamily.headModule => HeadModuleState(libs.model),
+    DeviceFamily.slideModule => SlideModuleState(libs.model),
+    _ => throw SessionError(SessionFailure.unsupported, '${libs.model.displayName} is not driven by this port'),
+  };
 }
 
 class HeadModuleState extends DeviceState {
@@ -133,12 +133,15 @@ List<int> storedSlots(DeviceState state, PoseKind kind) {
     if (kind == PoseKind.keypose) flags = state.generalStatus?.locationsValid;
   }
   if (flags == null) return [];
-  return [for (var i = 0; i < flags.length; i++) if (flags[i] != 0) i];
+  return [
+    for (var i = 0; i < flags.length; i++)
+      if (flags[i] != 0) i,
+  ];
 }
 
 /// The layout the device itself reports.
 EdlSetup? reportedSetupOf(DeviceState s) => switch (s) {
-      HeadModuleState(:final generalStatus) => generalStatus?.configuration,
-      SlideModuleState(:final generalStatus) => generalStatus?.configuration,
-      _ => null,
-    };
+  HeadModuleState(:final generalStatus) => generalStatus?.configuration,
+  SlideModuleState(:final generalStatus) => generalStatus?.configuration,
+  _ => null,
+};
