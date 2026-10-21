@@ -6,49 +6,9 @@
 /// not just the motion currently underway.
 library;
 
-import 'dart:async';
-
 import 'package:test/test.dart';
 
-import '../lib/ble/ek_snapshot.dart';
-import '../lib/control/motion_settings.dart';
-import '../lib/control/ping_pong.dart';
 import '../lib/control/stop_registry.dart';
-import '../lib/ek_protocol.dart';
-
-class RecordingDevice implements EkMotionTarget {
-  RecordingDevice(this.kind);
-
-  @override
-  final EkKind kind;
-
-  final recalls = <int>[];
-  int stops = 0;
-
-  @override
-  EkSnapshot get snapshot => EkSnapshot(
-        link: EkLinkState.ready,
-        kind: kind,
-        state: EkState.keyposeMove,
-        lastFrameAt: DateTime.now(),
-      );
-
-  @override
-  Stream<EkSnapshot> get snapshots => const Stream.empty();
-
-  @override
-  Future<void> recallPose(int slot, {required MotionSettings settings}) async =>
-      recalls.add(slot);
-
-  @override
-  Future<void> savePose(int slot) async {}
-
-  @override
-  Future<void> setVelocity(int countsPerSec) async {}
-
-  @override
-  Future<void> stopMotion() async => stops++;
-}
 
 void main() {
   group('registry basics', () {
@@ -117,35 +77,6 @@ void main() {
 
       expect(failures, isEmpty);
       expect(other, 1);
-    });
-  });
-
-  group('stopping a running ping-pong', () {
-    test('a registered loop stops issuing recalls, not just the motor',
-        () async {
-      // Stopping the device alone would be undone by the loop's next leg. This
-      // is the bug the registry exists to prevent.
-      final d = RecordingDevice(EkKind.slider);
-      final pp = PingPongController(target: d);
-      final r = StopRegistry();
-
-      unawaited(pp.start(
-        motion: const MotionSettings(),
-        settle: const Duration(milliseconds: 40),
-        launchGrace: const Duration(milliseconds: 80),
-      ));
-      r.register(pp, pp.stop);
-
-      await Future<void>.delayed(const Duration(milliseconds: 60));
-      await r.stopAll();
-
-      expect(pp.isRunning, isFalse);
-      expect(d.stops, greaterThan(0));
-
-      final after = d.recalls.length;
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-      expect(d.recalls.length, after,
-          reason: 'no further legs may be commanded after a stop');
     });
   });
 }

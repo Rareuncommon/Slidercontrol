@@ -1,380 +1,250 @@
-/// Slidercontrol — BLE control for edelkrone SliderPLUS v6 and HeadONE.
+/// Slidercontrol — a HeadONE and SliderPLUS controller, built on a Dart port
+/// of edelkrone's own Python SDK (lib/sdk).
 ///
-/// See EDELKRONE_PROTOCOL.md for the protocol this speaks, and §8 for what is
-/// still undecoded.
+/// This page finds the rig. Joining the slider to the head is offered here,
+/// because joined, the head plans every stored-pose move for both axes.
 library;
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
-import 'ble/ek_adapter.dart';
-import 'ble/ek_connection.dart';
-import 'ble/ek_permissions.dart';
-import 'ble/ek_scanner.dart';
+import 'app/flutter_support.dart';
+import 'app/permissions.dart';
+import 'app/rig_controller.dart';
 import 'control/stop_registry.dart';
-import 'ek_protocol.dart';
-import 'ui/control_page.dart';
+import 'sdk/api/connect.dart' show Seen;
+import 'sdk/devices/registry.dart';
+import 'sdk/protocol/generated/moco.dart';
+import 'sdk/transport/flutter_blue_transport.dart';
 import 'ui/emergency_stop.dart';
+import 'ui/rig_page.dart';
+import 'ui/ui_scale.dart';
 
 void main() {
+  LogBuffer.instance.install();
   runApp(const SlidercontrolApp());
 }
 
-class SlidercontrolApp extends StatelessWidget {
+class SlidercontrolApp extends StatefulWidget {
   const SlidercontrolApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Slidercontrol',
-      theme: ThemeData(
-        colorSchemeSeed: Colors.teal,
-        brightness: Brightness.dark,
-        useMaterial3: true,
-      ),
-      home: const DeviceListPage(),
-      builder: (context, child) => EmergencyStopKeys(
-        registry: StopRegistry.instance,
-        child: child ?? const SizedBox.shrink(),
-      ),
-    );
-  }
+  State<SlidercontrolApp> createState() => _SlidercontrolAppState();
 }
 
-class DeviceListPage extends StatefulWidget {
-  const DeviceListPage({super.key});
-
-  @override
-  State<DeviceListPage> createState() => _DeviceListPageState();
-}
-
-class _DeviceListPageState extends State<DeviceListPage>
-    with WidgetsBindingObserver {
-  final _scanner = EkScanner();
-  final _connections = <String, EkConnection>{};
-  final _snapSubs = <String, StreamSubscription<EkSnapshot>>{};
-
-  /// Remembered so a connected device stays in the list.
-  ///
-  /// A connected BLE peripheral stops advertising, so it does not appear in any
-  /// subsequent scan. Without this, rescanning made a connected — possibly
-  /// moving — device disappear from the UI along with its disconnect button
-  /// and its control panel.
-  final _connectedInfo = <String, EkDiscovered>{};
-
-  List<EkDiscovered> _found = const [];
-
-  /// Connections that can actually be driven right now.
-  List<EkConnection> get _readyConnections =>
-      _connections.values.where((c) => c.snapshot.isReady).toList();
-
-  /// Everything to show: whatever the last scan saw, plus anything connected.
-  List<EkDiscovered> get _visible {
-    final byId = <String, EkDiscovered>{
-      for (final d in _found) d.id: d,
-    };
-    for (final entry in _connectedInfo.entries) {
-      byId.putIfAbsent(entry.key, () => entry.value);
-    }
-    final out = byId.values.toList()
-      ..sort((a, b) => a.advertisedName.compareTo(b.advertisedName));
-    return out;
-  }
-  String? _message;
-  bool _needsSettings = false;
-  bool _busy = false;
-
-  StreamSubscription<BluetoothAdapterState>? _adapterSub;
-  BluetoothAdapterState _adapter = BluetoothAdapterState.unknown;
+class _SlidercontrolAppState extends State<SlidercontrolApp> with WidgetsBindingObserver {
+  late final RigController controller = RigController(transport: FlutterBlueTransport(), names: PrefsPoseNameStore());
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _scanner.devices.listen((d) {
-      if (mounted) setState(() => _found = d);
-    });
-
-    // Listening from startup is what triggers CoreBluetooth to initialise, and
-    // therefore what raises the macOS Bluetooth permission prompt — before the
-    // user presses anything.
-    _adapterSub = FlutterBluePlus.adapterState.listen((s) {
-      if (!mounted) return;
-      setState(() {
-        _adapter = s;
-        // Clear a stale complaint once the adapter is genuinely usable.
-        if (s == BluetoothAdapterState.on && _needsSettings) {
-          _message = null;
-          _needsSettings = false;
-        }
-      });
-    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _adapterSub?.cancel();
-    for (final s in _snapSubs.values) {
-      s.cancel();
-    }
-    // Each connection sends its stop before dropping the link.
-    for (final c in _connections.values) {
-      StopRegistry.instance.unregister(c);
-      c.dispose();
-    }
-    _scanner.dispose();
+    unawaited(controller.dispose());
     super.dispose();
   }
 
-  /// Backgrounding the app stops every connected device.
-  ///
-  /// A device left mid-move keeps executing and holds torque, leaving the
-  /// carriage locked and unmovable by hand (§7).
+  /// Backgrounding stops everything. The SDK does not stop moving equipment on
+  /// its own, and a held joystick would otherwise run on for 1.5 s.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.detached ||
-        state == AppLifecycleState.hidden) {
-      StopRegistry.instance.stopAll().catchError((Object _) => <String>[]);
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden || state == AppLifecycleState.detached) {
+      unawaited(StopRegistry.instance.stopAll());
     }
-  }
-
-  /// permission_handler cannot open settings on every platform, so a failure
-  /// falls back to telling the user where to go rather than a dead button.
-  Future<void> _openSettings() async {
-    final opened = await EkPermissions.openSettings();
-    if (!mounted || opened) return;
-    setState(() => _message =
-        'Could not open Settings automatically. Open System Settings → '
-        'Privacy & Security → Bluetooth and enable Slidercontrol, then scan '
-        'again.');
-  }
-
-  Future<void> _scan() async {
-    setState(() {
-      _busy = true;
-      _message = null;
-      _needsSettings = false;
-    });
-    try {
-      if (await FlutterBluePlus.isSupported == false) {
-        setState(() => _message = 'Bluetooth is not supported on this device.');
-        return;
-      }
-
-      final denied = await EkPermissions.request();
-      if (denied != null) {
-        setState(() => _message = denied);
-        return;
-      }
-
-      // Wait for CoreBluetooth to actually know its own state. Scanning while
-      // it is still `unknown` throws "bluetooth must be turned on" even when
-      // Bluetooth is on and about to report itself as such.
-      final status = await EkAdapter.waitUntilReady();
-      if (!mounted) return;
-      if (!status.canScan) {
-        setState(() {
-          _message = status.problem;
-          _needsSettings = status.needsSettings;
-        });
-        return;
-      }
-
-      await _scanner.start();
-    } catch (e) {
-      setState(() => _message = '$e');
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _connect(EkDiscovered d) async {
-    final conn = EkConnection(
-      device: d.device,
-      profile: d.profile,
-      name: d.advertisedName,
-    );
-    setState(() {
-      _connections[d.id] = conn;
-      _connectedInfo[d.id] = d;
-    });
-    _snapSubs[d.id] = conn.snapshots.listen((_) {
-      if (mounted) setState(() {});
-    });
-    StopRegistry.instance.register(conn, conn.stopMotion);
-
-    try {
-      await _scanner.stop();
-      await conn.connect();
-    } catch (e) {
-      if (mounted) setState(() => _message = 'Connect failed: $e');
-    }
-  }
-
-  Future<void> _disconnect(String id) async {
-    await _snapSubs.remove(id)?.cancel();
-    final c = _connections.remove(id);
-    if (c != null) StopRegistry.instance.unregister(c);
-    setState(() => _connectedInfo.remove(id));
-    await c?.dispose();
-  }
-
-  /// Stops every connected device at once.
-  ///
-  /// The button you want when something is moving and you do not want to be
-  /// navigating to find the right screen first.
-  Future<void> _stopAll() async {
-    final n = StopRegistry.instance.count;
-    if (n == 0) return;
-    final failures = await StopRegistry.instance.stopAll();
-    if (!mounted) return;
-    setState(() => _message = failures.isEmpty ? null : failures.join('\n'));
-    if (failures.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Stopped')),
-      );
-    }
-  }
-
-  /// The device list is only an entry point — once connected, everything lives
-  /// on the control page.
-  void _openControls() {
-    final ready = _readyConnections;
-    if (ready.isEmpty) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => ControlPage(connections: ready),
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Slidercontrol',
+      theme: ThemeData(colorSchemeSeed: Colors.teal, brightness: Brightness.dark, useMaterial3: true),
+      builder: (context, child) =>
+          EmergencyStopKeys(registry: StopRegistry.instance, child: child ?? const SizedBox.shrink()),
+      home: ScanPage(controller: controller),
+    );
+  }
+}
+
+class ScanPage extends StatefulWidget {
+  const ScanPage({super.key, required this.controller});
+  final RigController controller;
+
+  @override
+  State<ScanPage> createState() => _ScanPageState();
+}
+
+class _ScanPageState extends State<ScanPage> {
+  RigController get c => widget.controller;
+  late final StreamSubscription<void> _sub;
+  String? _permissionProblem;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = c.changes.listen((_) {
+      if (!mounted) return;
+      setState(() {});
+      if (c.phase == RigPhase.connected && ModalRoute.of(context)?.isCurrent == true) {
+        Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => RigPage(controller: c))).then((_) {
+          if (mounted) unawaited(_scan());
+        });
+      }
+    });
+    unawaited(_scan());
+  }
+
+  @override
+  void dispose() {
+    unawaited(_sub.cancel());
+    super.dispose();
+  }
+
+  Future<void> _scan() async {
+    final problem = await EkPermissions.request();
+    if (!mounted) return;
+    setState(() => _permissionProblem = problem);
+    if (problem != null) return;
+    await c.startScan();
+  }
+
+  Future<void> _choose(Seen s) async {
+    if (!s.drivable) {
+      _snack('${s.name} is not something this app drives — it controls heads and sliders.');
+      return;
+    }
+    if (!s.recognised) {
+      _snack('The SDK does not recognise this combination of units.');
+      return;
+    }
+    final offer = c.joinable(s);
+    var join = <EdelkroneDevice>[...offer];
+    final go = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheet) => SafeArea(
+          child: Padding(
+            padding: Insets.page,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(s.name, style: Theme.of(context).textTheme.titleLarge),
+                Text('${s.mac} · ${_layoutLabel(s.layout)}${s.modules.isEmpty ? '' : ' with ${s.modules.join(', ')}'}'),
+                Gap.md,
+                if (offer.isNotEmpty) ...[
+                  for (final u in offer)
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      value: join.contains(u),
+                      onChanged: (v) => setSheet(() => v == true ? join.add(u) : join.remove(u)),
+                      title: Text('Join the ${u.displayName} to it'),
+                      subtitle: Text(
+                        '${u.mac}. Joined, the head plans every stored-pose move for both axes, so they '
+                        'start and arrive together. The layout lasts until a unit is switched off.',
+                      ),
+                    ),
+                  const Caution(
+                    'Joining can only be undone by switching the units off and on. A module already in '
+                    'another layout will not join a new one.',
+                  ),
+                ] else if (s.modules.isNotEmpty)
+                  Text('Already joined with ${s.modules.join(', ')}.'),
+                Gap.md,
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+                    Gap.wSm,
+                    FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Connect')),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (go == true) await c.connect(s, join: join);
+  }
+
+  void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scanning = c.phase == RigPhase.scanning;
+    final connecting = c.phase == RigPhase.connecting;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Slidercontrol'),
         actions: [
           IconButton(
-            onPressed: _busy ? null : _scan,
-            icon: const Icon(Icons.search),
-            tooltip: 'Scan',
+            tooltip: scanning ? 'Stop scanning' : 'Scan',
+            icon: Icon(scanning ? Icons.stop_circle_outlined : Icons.refresh),
+            onPressed: connecting ? null : () => scanning ? c.stopScan() : _scan(),
           ),
         ],
       ),
-      body: Column(
+      body: ListView(
+        padding: Insets.page,
         children: [
-          // Shown whenever anything is connected at all, including while a
-          // link is down and reconnecting. Hiding the stop control exactly when
-          // the link is unreliable is the wrong instinct: pressing it then
-          // reports why it could not be sent, which beats offering nothing.
-          if (_connections.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-              child: SizedBox(
-                height: 56,
-                width: double.infinity,
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Colors.red.shade700,
-                    foregroundColor: Colors.white,
-                  ),
-                  onPressed: _stopAll,
-                  icon: const Icon(Icons.stop_circle),
-                  label: const Text('STOP ALL  ·  Esc',
-                      style: TextStyle(fontSize: 18)),
-                ),
-              ),
+          if (_permissionProblem != null)
+            ErrorBanner(_permissionProblem!, onDismiss: () => setState(() => _permissionProblem = null)),
+          if (c.error != null) ErrorBanner(c.error!, onDismiss: c.clearError),
+          if (connecting)
+            const ListTile(
+              leading: CircularProgressIndicator(),
+              title: Text('Connecting…'),
+              subtitle: Text('Reading the identity, joining modules if asked, and waiting for them to answer.'),
             ),
-          if (_message != null)
-            Container(
-              width: double.infinity,
-              color: Theme.of(context).colorScheme.errorContainer,
-              padding: const EdgeInsets.all(12),
+          if (c.seen.isEmpty && !connecting)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 32),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (scanning) const CircularProgressIndicator(),
+                  Gap.md,
                   Text(
-                    _message!,
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onErrorContainer,
-                    ),
+                    scanning ? 'Looking for edelkrone units…' : 'Nothing found yet.',
+                    style: theme.textTheme.titleMedium,
                   ),
-                  if (_needsSettings)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Row(
-                        children: [
-                          FilledButton.tonal(
-                            onPressed: _openSettings,
-                            child: const Text('Open Settings'),
-                          ),
-                          const SizedBox(width: 8),
-                          FilledButton.tonal(
-                            onPressed: _busy ? null : _scan,
-                            child: const Text('Try again'),
-                          ),
-                        ],
-                      ),
-                    ),
+                  Gap.sm,
+                  const Text(
+                    'Switch the head and slider on. A unit connected to the edelkrone app on a phone will not '
+                    'accept a second connection — close that first.',
+                    textAlign: TextAlign.center,
+                  ),
                 ],
               ),
             ),
-          if (_adapter != BluetoothAdapterState.on)
-            Container(
-              width: double.infinity,
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: Text('Bluetooth: ${_adapter.name}',
-                  style: Theme.of(context).textTheme.bodySmall),
-            ),
-          if (_readyConnections.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-              child: SizedBox(
-                height: 52,
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: _openControls,
-                  icon: const Icon(Icons.tune),
-                  label: Text(_readyConnections.length == 1
-                      ? 'Open controls'
-                      : 'Open controls · ${_readyConnections.length} devices'),
+          for (final s in c.seen)
+            Card(
+              child: ListTile(
+                enabled: !connecting,
+                leading: Icon(s.modules.isNotEmpty || c.joinable(s).isNotEmpty ? Icons.videocam : Icons.linear_scale),
+                title: Text(s.name),
+                subtitle: Text(
+                  [
+                    s.mac,
+                    _layoutLabel(s.layout),
+                    if (s.modules.isNotEmpty) 'with ${s.modules.join(', ')}',
+                    if (!s.drivable) 'not driven by this app',
+                    if (s.layout == EdlSetup.GROUP_MEMBER) 'module of a layout — connect to its head',
+                  ].join(' · '),
                 ),
+                trailing: Text('${s.signal} dBm', style: theme.textTheme.bodySmall),
+                onTap: connecting ? null : () => _choose(s),
               ),
             ),
-          if (_busy) const LinearProgressIndicator(),
-          Expanded(
-            child: _visible.isEmpty
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text(
-                        'No edelkrone devices found yet.\n'
-                        'Power the devices on and tap the search icon.',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  )
-                : ListView.builder(
-                    itemCount: _visible.length,
-                    itemBuilder: (_, i) {
-                      final d = _visible[i];
-                      final c = _connections[d.id];
-                      return _DeviceTile(
-                        discovered: d,
-                        connection: c,
-                        onConnect: () => _connect(d),
-                        onDisconnect: () => _disconnect(d.id),
-                        onOpen: c != null && c.snapshot.isReady
-                            ? _openControls
-                            : null,
-                      );
-                    },
-                  ),
+          Gap.lg,
+          const Caution(
+            'Take the camera off the rig the first time you try anything that moves. The app stops '
+            'everything when it goes to the background, on Escape, and on STOP ALL.',
           ),
         ],
       ),
@@ -382,77 +252,11 @@ class _DeviceListPageState extends State<DeviceListPage>
   }
 }
 
-class _DeviceTile extends StatelessWidget {
-  const _DeviceTile({
-    required this.discovered,
-    required this.connection,
-    required this.onConnect,
-    required this.onDisconnect,
-    required this.onOpen,
-  });
-
-  final EkDiscovered discovered;
-  final EkConnection? connection;
-  final VoidCallback onConnect;
-  final VoidCallback onDisconnect;
-  final VoidCallback? onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final s = connection?.snapshot;
-    final theme = Theme.of(context);
-
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: ListTile(
-        onTap: onOpen,
-        leading: Icon(discovered.profile.kind == EkKind.slider
-            ? Icons.linear_scale
-            : Icons.threesixty),
-        title: Text(discovered.advertisedName),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('${discovered.profile.name} · ${discovered.rssi} dBm'),
-            if (s != null)
-              Row(
-                children: [
-                  Icon(
-                    s.isReporting ? Icons.circle : Icons.circle_outlined,
-                    size: 10,
-                    color: s.isReporting ? Colors.green : Colors.orange,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(s.link.name),
-                  if (s.batteryPercent != null) ...[
-                    const SizedBox(width: 12),
-                    const Icon(Icons.battery_full, size: 14),
-                    Text('${s.batteryPercent}%'),
-                  ],
-                ],
-              ),
-            if (s != null && s.isReady && !s.isReporting)
-              Text('no telemetry — check the keepalive',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: Colors.orange)),
-          ],
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (onOpen != null)
-              IconButton(
-                onPressed: onOpen,
-                icon: const Icon(Icons.tune),
-                tooltip: 'Controls',
-              ),
-            FilledButton.tonal(
-              onPressed: connection == null ? onConnect : onDisconnect,
-              child: Text(connection == null ? 'Connect' : 'Disconnect'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+String _layoutLabel(EdlSetup? s) => switch (s) {
+  null || EdlSetup.NONE => 'on its own',
+  EdlSetup.PAN_AND_SLIDE => 'pan and slide',
+  EdlSetup.TILT_AND_SLIDE => 'tilt and slide',
+  EdlSetup.SLIDE_ONLY => 'slider on its own',
+  EdlSetup.GROUP_MEMBER => 'in a layout',
+  _ => s.name.toLowerCase().replaceAll('_', ' '),
+};
